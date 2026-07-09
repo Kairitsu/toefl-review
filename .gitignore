@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+config.local
+config.local.*
+*.local
+secrets/*
+!secrets/
+!secrets/*.example
+
+# Runtime data, user content, databases, and logs
+data/
+datastore/
+uploads/
+cache/
+backup/
+backups/
+logs/
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.jsonl
+*.log
+
+# Browser/test artifacts
+.playwright-cli/
+import.yaml
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

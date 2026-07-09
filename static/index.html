@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TOEFL Review · 错题复习系统</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-root">
+      <header class="topbar" id="topbar">
+        <div class="topbar-inner">
+          <a class="brand" href="#" onclick="event.preventDefault(); navigate('import')">
+            <span class="brand-mark">TR</span>
+            <span class="brand-text">
+              <strong>TOEFL Review</strong>
+              <span>错题复习系统</span>
+            </span>
+          </a>
+          <nav class="top-nav" id="top-nav">
+            <button type="button" data-view="import" class="top-nav-btn active">导入</button>
+            <button type="button" data-view="library" class="top-nav-btn">题库</button>
+            <button type="button" data-view="practice" class="top-nav-btn">练习</button>
+            <button type="button" data-view="settings" class="top-nav-btn">设置</button>
+          </nav>
+        </div>
+      </header>
+      <main class="main" id="main">
+        <div id="app"></div>
+      </main>
+    </div>
+    <div id="toast" class="toast" hidden></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
