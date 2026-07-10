@@ -216,6 +216,14 @@ body.practice-mode .main > #app {
   min-height: 100vh;
 }
 
+body.login-mode .topbar {
+  display: none;
+}
+
+body.login-mode .main > #app {
+  min-height: 100vh;
+}
+
 /* ---------- Typography / layout helpers ---------- */
 
 .page {
@@ -1925,4 +1933,43 @@ button:focus-visible {
   }
 
   /* hide less-critical exam buttons on very narrow screens — kept via overflow wrap */
+}
+
+/* =========================================================
+   Login page
+   ========================================================= */
+
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 32px 28px;
+  box-shadow: var(--shadow-md);
+}
+
+.login-card h1 {
+  font-size: 1.3rem;
+  margin: 16px 0 20px;
+  color: var(--ink);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+}
+
+.login-brand strong {
+  font-size: 1rem;
 }

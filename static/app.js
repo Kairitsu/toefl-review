@@ -100,6 +100,11 @@ const state = {
   settingsTestResult: null,
   settingsDraft: null,
   settingsDraftApiKey: "",
+  auth: null,
+  authLoading: false,
+  authError: null,
+  authSettings: null,
+  authDraft: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -153,6 +158,11 @@ async function api(path, options = {}) {
     data = { error: text || response.statusText };
   }
   if (!response.ok) {
+    if (response.status === 401 && state.view !== "login") {
+      state.auth = { authRequired: true, authed: false };
+      setView("login");
+      render();
+    }
     const error = new Error(data.error || response.statusText);
     error.data = data;
     error.status = response.status;
@@ -169,10 +179,18 @@ function setView(view) {
   state.view = view;
   state.formValidation = null;
   document.querySelectorAll(".top-nav-btn").forEach((button) => {
+    if (button.id === "logout-btn") return;
     button.classList.toggle("active", button.dataset.view === view);
   });
   // Full exam immersion only while answering a question
   setPracticeModeClass(view === "practice" && Boolean(state.practiceQuestion));
+}
+
+function updateAuthChrome() {
+  const logoutBtn = document.getElementById("logout-btn");
+  const authed = state.auth && state.auth.authRequired && state.auth.authed;
+  document.body.classList.toggle("login-mode", state.view === "login");
+  if (logoutBtn) logoutBtn.hidden = !authed;
 }
 
 async function navigate(view) {
@@ -2444,7 +2462,12 @@ function retryCurrent() {
 
 async function loadSettings() {
   try {
-    state.settings = await api("/api/settings");
+    const [settings, authSettings] = await Promise.all([
+      api("/api/settings"),
+      api("/api/settings/auth"),
+    ]);
+    state.settings = settings;
+    state.authSettings = authSettings;
   } catch (error) {
     state.settings = { error: error.message };
   }
@@ -2462,6 +2485,10 @@ function renderSettings() {
   const hasDraftApiKey = Boolean(state.settingsDraftApiKey);
   const configured = Boolean(s.apiKeyConfigured) || hasDraftApiKey;
   const apiKeyStatus = hasDraftApiKey ? "已填写，尚未保存" : s.apiKeyConfigured ? "已配置" : "未配置";
+
+  const authCfg = state.authSettings || {};
+  const authDraft = state.authDraft || {};
+  const authError = state.authError;
 
   $("app").innerHTML = `
     <div class="page">
@@ -2506,6 +2533,34 @@ function renderSettings() {
             <button class="btn" type="button" onclick="testSettings()" ${state.settingsTesting ? "disabled" : ""}>
               ${state.settingsTesting ? "测试中..." : "测试连接"}
             </button>
+          </div>
+        </form>
+      </section>
+      <section class="panel settings-grid">
+        <div class="page-head" style="margin-bottom:0">
+          <div>
+            <h2 style="font-size:1.1rem;margin:0">访问认证</h2>
+            <p class="subtle">配置用户名和密码后，访问本系统需先登录。</p>
+          </div>
+          <span class="config-status ${authCfg.configured ? "ok" : "warn"}">
+            <span class="config-dot"></span>
+            登录认证：${authCfg.configured ? "已启用" : "未启用"}
+          </span>
+        </div>
+        ${authError ? `<div class="status error">${escapeHtml(authError)}</div>` : ""}
+        <form autocomplete="off" onsubmit="event.preventDefault(); saveAuthSettings()">
+          <div class="field">
+            <label>用户名</label>
+            <input id="auth-username" value="${attr(authDraft.username ?? authCfg.username ?? "")}" placeholder="设置登录用户名" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label>新密码</label>
+            <input id="auth-password" type="password" autocomplete="new-password"
+              placeholder="${authCfg.configured ? "留空表示不修改密码（需同时填写用户名）" : "设置登录密码"}" />
+          </div>
+          <label class="check-row"><input id="auth-clear" type="checkbox" ${authDraft.clearAuth ? "checked" : ""} /> 清除登录认证（恢复开放访问）</label>
+          <div class="toolbar actions">
+            <button class="btn primary" type="submit">保存认证设置</button>
           </div>
         </form>
       </section>
@@ -2579,7 +2634,34 @@ async function testSettings() {
   }
 }
 
+async function saveAuthSettings() {
+  const username = $("auth-username").value;
+  const password = $("auth-password").value;
+  const clearAuth = $("auth-clear").checked;
+  state.authDraft = { username, clearAuth };
+  state.authError = null;
+  if (!clearAuth && !password) {
+    state.authError = "请填写新密码";
+    renderSettings();
+    return;
+  }
+  try {
+    const body = clearAuth ? { clearAuth: true } : { username, password };
+    const result = await api("/api/settings/auth", { method: "POST", body: JSON.stringify(body) });
+    state.authSettings = result;
+    state.authDraft = null;
+    toast(clearAuth ? "已清除登录认证" : "认证设置已保存");
+    state.auth = await api("/api/auth/status");
+    renderSettings();
+  } catch (error) {
+    state.authError = `${error.message}${error.data?.details ? "：" + error.data.details.join("；") : ""}`;
+    renderSettings();
+  }
+}
+
 function render() {
+  updateAuthChrome();
+  if (state.view === "login") return renderLogin();
   if (state.view === "import") return renderImport();
   if (state.view === "library") return renderLibrary();
   if (state.view === "edit") return renderEdit();
@@ -2587,7 +2669,80 @@ function render() {
   if (state.view === "settings") return renderSettings();
 }
 
+/* ===================== Auth ===================== */
+
+function renderLogin() {
+  const err = state.authError;
+  $("app").innerHTML = `
+    <div class="login-page">
+      <form class="login-card" autocomplete="on" onsubmit="event.preventDefault(); login()">
+        <div class="login-brand">
+          <span class="brand-mark">TR</span>
+          <strong>TOEFL Review</strong>
+        </div>
+        <h1>登录</h1>
+        ${err ? `<div class="status error">${escapeHtml(err)}</div>` : ""}
+        <div class="field">
+          <label>用户名</label>
+          <input id="login-username" type="text" autocomplete="username" autofocus />
+        </div>
+        <div class="field">
+          <label>密码</label>
+          <input id="login-password" type="password" autocomplete="current-password" />
+        </div>
+        <div class="toolbar actions">
+          <button class="btn primary" type="submit" ${state.authLoading ? "disabled" : ""}>
+            ${state.authLoading ? "登录中..." : "登录"}
+          </button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+async function login() {
+  const username = $("login-username").value;
+  const password = $("login-password").value;
+  state.authLoading = true;
+  state.authError = null;
+  renderLogin();
+  try {
+    await api("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+    state.auth = { authRequired: true, authed: true, username };
+    state.authLoading = false;
+    navigate("import");
+  } catch (error) {
+    state.authLoading = false;
+    state.authError = error.message || "登录失败";
+    renderLogin();
+  }
+}
+
+async function logout() {
+  try {
+    await api("/api/auth/logout", { method: "POST" });
+  } catch {}
+  state.auth = { authRequired: true, authed: false };
+  setView("login");
+  render();
+}
+
+async function initApp() {
+  try {
+    state.auth = await api("/api/auth/status");
+  } catch {
+    state.auth = { authRequired: false, authed: true };
+  }
+  if (state.auth.authRequired && !state.auth.authed) {
+    setView("login");
+    render();
+  } else {
+    navigate("import");
+  }
+}
+
 document.querySelectorAll(".top-nav-btn").forEach((button) => {
+  if (button.id === "logout-btn") return;
   button.addEventListener("click", () => navigate(button.dataset.view));
 });
 
@@ -2621,6 +2776,11 @@ window.retryCurrent = retryCurrent;
 window.showPracticeHelp = showPracticeHelp;
 window.saveSettings = saveSettings;
 window.testSettings = testSettings;
+window.saveAuthSettings = saveAuthSettings;
+window.login = login;
+window.logout = logout;
 window.state = state;
+
+initApp();
 
 render();

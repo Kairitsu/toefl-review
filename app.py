@@ -1,18 +1,20 @@
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import sqlite3
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, session
 
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
@@ -27,6 +29,10 @@ TYPE_LABELS = {
 
 app = Flask(__name__, static_folder="static")
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
+
+_app_secret = os.environ.get("APP_SECRET", "")
+app.secret_key = hashlib.sha256(_app_secret.encode("utf-8")).hexdigest() if _app_secret else secrets.token_hex(32)
+app.permanent_session_lifetime = timedelta(days=7)
 
 
 def now_iso():
@@ -103,6 +109,42 @@ def decrypt_secret(value):
         return app_fernet().decrypt(value.encode("utf-8")).decode("utf-8")
     except InvalidToken as exc:
         raise RuntimeError("Stored API key cannot be decrypted with the current APP_SECRET") from exc
+
+
+def hash_password(password):
+    salt = secrets.token_hex(16)
+    iterations = 200000
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), iterations)
+    return f"pbkdf2_sha256${iterations}${salt}${digest.hex()}"
+
+
+def verify_password(password, stored):
+    try:
+        algo, iters_str, salt, expected_hex = stored.split("$")
+        if algo != "pbkdf2_sha256":
+            return False
+        iterations = int(iters_str)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), iterations)
+        return hmac.compare_digest(digest.hex(), expected_hex)
+    except (ValueError, AttributeError):
+        return False
+
+
+AUTH_EXEMPT_EXACT = {"/", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/status"}
+
+
+def auth_configured(db):
+    username = get_setting(db, "auth_username", "")
+    password_hash = get_setting(db, "auth_password_hash", "")
+    return bool(username and password_hash)
+
+
+def is_authed():
+    authed_at = session.get("authed_at")
+    if not authed_at:
+        return False
+    max_age = app.permanent_session_lifetime.total_seconds()
+    return (time.time() - authed_at) < max_age
 
 
 def get_setting(db, key, default=None):
@@ -1905,6 +1947,20 @@ def grade_attempt(question, answer):
     return False, {"error": "unsupported type"}
 
 
+@app.before_request
+def require_auth():
+    path = request.path
+    # 静态资源、首页、健康检查、认证端点一律放行
+    if path == "/" or path.startswith("/static/") or path in AUTH_EXEMPT_EXACT or path.startswith("/api/auth/"):
+        return None
+    with get_db() as db:
+        if not auth_configured(db):
+            return None  # 未配置凭据，保持开放
+    if is_authed():
+        return None
+    return jsonify({"error": "未登录或会话已过期", "authRequired": True}), 401
+
+
 @app.after_request
 def add_security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -1939,6 +1995,43 @@ def static_files(path):
 @app.get("/api/health")
 def health():
     return jsonify({"ok": True, "time": int(time.time())})
+
+
+@app.get("/api/auth/status")
+def auth_status():
+    with get_db() as db:
+        configured = auth_configured(db)
+    return jsonify({
+        "authRequired": configured,
+        "authed": is_authed() if configured else True,
+        "username": session.get("username") if is_authed() else None,
+    })
+
+
+@app.post("/api/auth/login")
+def auth_login():
+    payload = request.get_json(force=True, silent=True) or {}
+    username = as_clean_string(payload.get("username"))
+    password = payload.get("password", "")
+    if not isinstance(password, str):
+        return jsonify({"error": "用户名或密码错误"}), 401
+    with get_db() as db:
+        if not auth_configured(db):
+            return jsonify({"error": "尚未配置登录认证"}), 400
+        stored_user = get_setting(db, "auth_username", "")
+        stored_hash = get_setting(db, "auth_password_hash", "")
+    if not hmac.compare_digest(username, stored_user) or not verify_password(password, stored_hash):
+        return jsonify({"error": "用户名或密码错误"}), 401
+    session.permanent = True
+    session["authed_at"] = time.time()
+    session["username"] = username
+    return jsonify({"ok": True, "username": username})
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    session.clear()
+    return jsonify({"ok": True})
 
 
 @app.get("/api/settings")
@@ -1993,6 +2086,47 @@ def test_settings():
     if test_errors:
         return jsonify({"error": "连接测试失败", "details": test_errors}), 502
     return jsonify({"ok": True, **result})
+
+
+@app.get("/api/settings/auth")
+def get_auth_settings():
+    with get_db() as db:
+        username = get_setting(db, "auth_username", "")
+        return jsonify({
+            "configured": auth_configured(db),
+            "username": username,
+        })
+
+
+@app.post("/api/settings/auth")
+def save_auth_settings():
+    payload = request.get_json(force=True, silent=True) or {}
+    username = as_clean_string(payload.get("username"))
+    password = payload.get("password", "")
+    clear_auth = bool(payload.get("clearAuth"))
+    if not isinstance(password, str):
+        password = ""
+    errors = []
+    if not clear_auth:
+        if not username:
+            errors.append("用户名不能为空")
+        if not password:
+            errors.append("密码不能为空")
+    if errors:
+        return jsonify({"error": "认证设置校验失败", "details": errors}), 400
+    with get_db() as db:
+        if clear_auth:
+            db.execute("DELETE FROM settings WHERE key IN (?, ?)", ("auth_username", "auth_password_hash"))
+            db.commit()
+            session.clear()
+            return jsonify({"ok": True, "configured": False})
+        set_setting(db, "auth_username", username)
+        set_setting(db, "auth_password_hash", hash_password(password))
+        db.commit()
+    session.permanent = True
+    session["authed_at"] = time.time()
+    session["username"] = username
+    return jsonify({"ok": True, "configured": True, "username": username})
 
 
 @app.post("/api/import/parse")
