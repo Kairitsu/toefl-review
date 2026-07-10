@@ -2347,6 +2347,10 @@ def delete_question(question_id):
 def practice_next():
     mode = request.args.get("mode", "random")
     qtype = as_clean_string(request.args.get("type"))
+    try:
+        count = max(1, min(100, int(request.args.get("count", "1") or "1")))
+    except (ValueError, TypeError):
+        count = 1
     filters = []
     params = []
     if qtype:
@@ -2377,22 +2381,28 @@ def practice_next():
         GROUP BY q.id
         {having}
         {order}
-        LIMIT 1
+        LIMIT ?
     """
+    params.append(count)
     with get_db() as db:
-        row = db.execute(sql, params).fetchone()
-    if not row:
+        rows = db.execute(sql, params).fetchall()
+    if not rows:
         return jsonify({"error": "没有符合条件的题目"}), 404
-    attempts = int(row["attempts"] or 0)
-    incorrect = int(row["incorrect"] or 0)
-    stats = {
-        "attempts": attempts,
-        "correct": int(row["correct"] or 0),
-        "incorrect": incorrect,
-        "errorRate": round((incorrect / attempts) * 100, 1) if attempts else 0,
-        "lastPracticedAt": row["last_practiced_at"],
-    }
-    return jsonify(row_to_question(row, stats))
+    items = []
+    for row in rows:
+        attempts = int(row["attempts"] or 0)
+        incorrect = int(row["incorrect"] or 0)
+        stats = {
+            "attempts": attempts,
+            "correct": int(row["correct"] or 0),
+            "incorrect": incorrect,
+            "errorRate": round((incorrect / attempts) * 100, 1) if attempts else 0,
+            "lastPracticedAt": row["last_practiced_at"],
+        }
+        items.append(row_to_question(row, stats))
+    if count == 1 and len(items) == 1:
+        return jsonify(items[0])
+    return jsonify({"items": items})
 
 
 @app.post("/api/questions/<int:question_id>/attempts")

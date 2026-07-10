@@ -30,7 +30,7 @@ const BUILD_SENTENCE_RAW_FIELDS = [
   {
     key: "sentenceTemplate",
     label: "句子模板",
-    placeholder: "例如：_____ _____ _____ _____ _____ during the _____ _____.\n空位用下划线或 {{blank}}；固定词（如 during the）原样保留",
+    placeholder: "空位用下划线或 {{blank}}；固定词原样保留",
   },
   { key: "wordBank", label: "词库", placeholder: "词或词组之间用逗号隔开，例如：presentation, entire, their, public speaking" },
   {
@@ -51,7 +51,7 @@ const COMPLETE_WORDS_RAW_FIELDS = [
   {
     key: "answers",
     label: "答案",
-    placeholder: "按空格出现顺序填写，每行一个：\need\n或缺失字母：ed\n多空示例：\ntion\ntems\never",
+    placeholder: "按空格出现顺序填写，每行一个",
   },
   { key: "analysis", label: "解析", placeholder: "题目解析（可选）" },
 ];
@@ -83,14 +83,19 @@ const state = {
   completeWordsRawFields: { passage: "", answers: "", analysis: "" },
   completeWordsFields: { passage: "", answers: "", analysis: "" },
   library: [],
+  librarySelected: new Set(),
   filters: { type: "", sort: "created", q: "" },
   editQuestion: null,
   formValidation: null,
   practiceMode: "random",
   practiceQuestion: null,
+  practiceQuestions: [],
   practiceResult: null,
   practiceSessionIndex: 0,
+  practiceSessionCorrect: 0,
   practiceTotal: 0,
+  practiceTarget: 10,
+  practiceFinished: false,
   buildOrderIndices: [],
   activeBlankIndex: 0,
   selectedChoice: "",
@@ -199,7 +204,7 @@ async function navigate(view) {
   }
   setView(view);
   render();
-  if (view === "library") await loadLibrary();
+  if (view === "library" || view === "practice_select") await loadLibrary();
   if (view === "settings") await loadSettings();
   if (view === "practice" && !state.practiceQuestion) {
     await refreshPracticeTotal();
@@ -355,7 +360,6 @@ function readingChoiceRawTableHtml(fields, parseDisabled) {
         </tbody>
       </table>
     </div>
-    <p class="field-example">左侧内容只用于“调用 LLM 解析”；解析完成后会回填到右侧结构化编辑区。</p>
   `;
 }
 
@@ -479,7 +483,6 @@ function completeWordsRawInputHtml(fields, parseDisabled) {
         </tbody>
       </table>
     </div>
-    <p class="field-example">左侧内容只用于“调用 LLM 解析”；解析完成后会回填到右侧结构化编辑区。</p>
   `;
 }
 
@@ -501,7 +504,6 @@ function completeWordsStructuredFieldsHtml(fields, parseDisabled) {
         `,
       ).join("")}
     </div>
-    <p class="field-example">规则：只根据短文里的下划线识别空格（如 <code>ne__</code>）。答案可写缺失字母或完整词。</p>
   `;
 }
 
@@ -632,11 +634,6 @@ function onCompleteWordsImportInput() {
   const canSave = Boolean(state.importValidation?.ok);
   const saveBtn = $("complete-import-save");
   if (saveBtn) saveBtn.disabled = !canSave;
-  const pill = document.querySelector(".panel-title .pill");
-  if (pill) {
-    pill.className = canSave ? "pill ok" : "pill neutral";
-    pill.textContent = canSave ? "可保存" : "填写中";
-  }
 }
 
 function completeWordsImportPreviewHtml(draft, validation, analysisText) {
@@ -796,7 +793,6 @@ function renderImport() {
       <div class="page-head">
         <div>
           <h1>导入错题</h1>
-          <p class="subtle">粘贴题目原文 → LLM 解析 → 预览校正 → 保存进题库</p>
         </div>
         <button class="btn" type="button" onclick="navigate('settings')">LLM 设置</button>
       </div>
@@ -805,7 +801,6 @@ function renderImport() {
           <div class="workbench-head">
             <div>
               <strong>粘贴工作台</strong>
-              <p class="subtle" style="margin:4px 0 0">选择题型后调用 LLM 解析</p>
             </div>
             <span class="type-badge">${TYPE_NAMES[normalizeImportType(state.importTypeHint)]}</span>
           </div>
@@ -841,7 +836,6 @@ function renderImport() {
         <section class="panel">
           <div class="panel-title">
             <h2>解析预览</h2>
-            ${hasDraft ? `<span class="pill ok">已生成草稿</span>` : `<span class="pill neutral">等待解析</span>`}
           </div>
           ${hasDraft ? confirmationBanner(draft) : `<div class="status soft-info">解析后会按题型展示结构化字段，可在此直接修改。</div>`}
           ${validationHtml(state.importValidation)}
@@ -929,7 +923,6 @@ function renderCompleteWordsImport() {
       <div class="page-head">
         <div>
           <h1>导入错题</h1>
-          <p class="subtle">阅读填词题：短文下划线识别空格 → 预览 → 保存</p>
         </div>
         <button class="btn" type="button" onclick="navigate('settings')">LLM 设置</button>
       </div>
@@ -938,7 +931,6 @@ function renderCompleteWordsImport() {
           <div class="workbench-head">
             <div>
               <strong>阅读填词题</strong>
-              <p class="subtle" style="margin:4px 0 0">只根据下划线位置识别空格</p>
             </div>
             <span class="type-badge">阅读填词题</span>
           </div>
@@ -968,7 +960,6 @@ function renderCompleteWordsImport() {
         <section class="panel">
           <div class="panel-title">
             <h2>结构化编辑</h2>
-            ${canSave ? `<span class="pill ok">可保存</span>` : `<span class="pill neutral">填写中</span>`}
           </div>
           ${completeWordsStructuredFieldsHtml(fields, parseDisabled)}
           <div class="toolbar complete-ops">
@@ -1281,7 +1272,6 @@ function templatePreviewHtml(template) {
     <div class="template-preview">
       <div class="template-preview-label">模板预览 · ${blanks} 个空位</div>
       <div class="template-preview-body">${html}</div>
-      <p class="subtle" style="margin:8px 0 0">下划线 = 可填空位；其余文字/标点为固定文本，练习时原样显示。</p>
     </div>
   `;
 }
@@ -1301,8 +1291,7 @@ function buildFormHtml(q, scope) {
     </div>
     <div class="field">
       <label>句子模板 <span class="field-hint">空位用 ____ 或 {{blank}}；固定词原样保留</span></label>
-      <textarea id="${scope}-sentence-template" placeholder="示例：_____ _____ _____ _____ _____ during the _____ _____.">${escapeHtml(data.sentenceTemplate)}</textarea>
-      <p class="field-example">示例：<code>_____ _____ during the _____ _____.</code> → 4 个空 + 固定文本 “during the” + 句号</p>
+      <textarea id="${scope}-sentence-template" placeholder="空位用 ____ 或 {{blank}}；固定词原样保留">${escapeHtml(data.sentenceTemplate)}</textarea>
       ${templatePreviewHtml(data.sentenceTemplate)}
     </div>
     <div class="field">
@@ -1317,7 +1306,7 @@ function buildFormHtml(q, scope) {
     </div>
     <div class="field">
       <label>完整正确句子</label>
-      <input id="${scope}-complete-sentence" value="${attr(data.completeSentence || "")}" placeholder="Their public speaking skills were exceptional during the entire presentation." />
+      <input id="${scope}-complete-sentence" value="${attr(data.completeSentence || "")}" />
     </div>
   `;
 }
@@ -1596,7 +1585,7 @@ function renderLibrary() {
         <div class="question-list">
           ${
             state.library.length
-              ? state.library.map(questionCardHtml).join("")
+              ? state.library.map((q) => questionCardHtml(q)).join("")
               : `<div class="empty">暂无题目。先从导入页添加一道错题。</div>`
           }
         </div>
@@ -1605,7 +1594,53 @@ function renderLibrary() {
   `;
 }
 
-function questionCardHtml(q) {
+function renderPracticeSelect() {
+  const f = state.filters;
+  const selCount = state.librarySelected.size;
+  $("app").innerHTML = `
+    <div class="page">
+      <div class="page-head">
+        <div>
+          <h1>选择练习题目</h1>
+          <p class="subtle">共 ${state.library.length} 道题 · 勾选后点击「开始练习」</p>
+        </div>
+        <button class="btn" type="button" onclick="navigate('practice')">返回练习</button>
+      </div>
+      <section class="panel">
+        <div class="filters">
+          <select onchange="updateFilter('type', this.value)" aria-label="题型筛选">
+            <option value="">全部题型</option>
+            ${Object.entries(TYPE_NAMES)
+              .map(([value, label]) => `<option value="${value}" ${f.type === value ? "selected" : ""}>${label}</option>`)
+              .join("")}
+          </select>
+          <select onchange="updateFilter('sort', this.value)" aria-label="排序">
+            <option value="created" ${f.sort === "created" ? "selected" : ""}>按创建时间</option>
+            <option value="error_rate" ${f.sort === "error_rate" ? "selected" : ""}>按错误率排序</option>
+            <option value="recent_practice" ${f.sort === "recent_practice" ? "selected" : ""}>按最近练习时间</option>
+          </select>
+          <input value="${attr(f.q)}" oninput="debouncedSearch(this.value)" placeholder="搜索题干或文章" aria-label="搜索" />
+        </div>
+        <div class="question-list">
+          ${
+            state.library.length
+              ? state.library.map((q) => questionCardHtml(q, true)).join("")
+              : `<div class="empty">暂无题目。先从导入页添加题目。</div>`
+          }
+        </div>
+      </section>
+      <div class="selection-bar" id="selection-bar" ${selCount ? "" : "hidden"}>
+        <span id="selection-count">已选 ${selCount} 道</span>
+        <div class="selection-actions">
+          <button class="btn" type="button" onclick="clearLibrarySelection()">取消</button>
+          <button class="btn primary" type="button" onclick="startPracticeFromSelection()">开始练习</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function questionCardHtml(q, selectable = false) {
   const stats = q.stats || {};
   const errorRate = Number(stats.errorRate || 0);
   const highError = (stats.attempts || 0) >= 2 && errorRate >= 50;
@@ -1617,9 +1652,21 @@ function questionCardHtml(q) {
       : q.type === "complete_words"
         ? `<h3 style="margin-top:10px">阅读填词题</h3>`
         : `<h3 style="margin-top:10px">${escapeHtml(q.title || "未命名题目")}</h3>`;
+  const selected = state.librarySelected.has(q.id);
+  const selectHtml = selectable
+    ? `<label class="card-select"><input type="checkbox" ${selected ? "checked" : ""} onchange="toggleLibrarySelect(${q.id})" /></label>`
+    : "";
+  const actionsHtml = selectable
+    ? ""
+    : `<div class="card-actions">
+         <button class="btn small primary" type="button" onclick="practiceQuestion(${q.id})">练习</button>
+         <button class="btn small" type="button" onclick="editQuestion(${q.id})">编辑</button>
+         <button class="btn small danger" type="button" onclick="deleteQuestion(${q.id})">删除</button>
+       </div>`;
   return `
-    <article class="question-card ${highError ? "high-error" : ""}">
+    <article class="question-card ${highError ? "high-error" : ""} ${selected ? "selected" : ""}" data-id="${q.id}">
       <div class="question-card-head">
+        ${selectHtml}
         <div>
           <div class="card-meta">
             <span class="type-badge">${TYPE_NAMES[q.type] || q.type}</span>
@@ -1636,11 +1683,7 @@ function questionCardHtml(q) {
             <span class="metric">最近 ${escapeHtml(formatTime(stats.lastPracticedAt || q.lastPracticedAt))}</span>
           </div>
         </div>
-        <div class="card-actions">
-          <button class="btn small primary" type="button" onclick="practiceQuestion(${q.id})">练习</button>
-          <button class="btn small" type="button" onclick="editQuestion(${q.id})">编辑</button>
-          <button class="btn small danger" type="button" onclick="deleteQuestion(${q.id})">删除</button>
-        </div>
+        ${actionsHtml}
       </div>
     </article>
   `;
@@ -1660,6 +1703,41 @@ function debouncedSearch(value) {
 async function updateFilter(key, value) {
   state.filters[key] = value;
   await loadLibrary();
+}
+
+function toggleLibrarySelect(id) {
+  id = Number(id);
+  if (state.librarySelected.has(id)) {
+    state.librarySelected.delete(id);
+  } else {
+    state.librarySelected.add(id);
+  }
+  const count = state.librarySelected.size;
+  const bar = document.getElementById("selection-bar");
+  if (bar) bar.hidden = count === 0;
+  const label = document.getElementById("selection-count");
+  if (label) label.textContent = `已选 ${count} 道`;
+  const card = document.querySelector(`.question-card[data-id="${id}"]`);
+  if (card) card.classList.toggle("selected", state.librarySelected.has(id));
+}
+
+function clearLibrarySelection() {
+  state.librarySelected = new Set();
+  render();
+}
+
+function startPracticeFromSelection() {
+  const ids = [...state.librarySelected];
+  if (!ids.length) return;
+  const idSet = new Set(ids);
+  const questions = state.library.filter((q) => idSet.has(q.id));
+  if (!questions.length) return;
+  state.practiceQuestions = questions;
+  state.practiceSessionIndex = 0;
+  state.practiceFinished = false;
+  state.practiceTarget = questions.length;
+  state.librarySelected = new Set();
+  goToQuestion(0);
 }
 
 async function editQuestion(id) {
@@ -1712,16 +1790,13 @@ async function refreshPracticeTotal() {
 
 function examBarHtml(q) {
   const section = TYPE_SECTIONS[q?.type] || "Practice";
-  const total = Number(state.practiceTotal) || 0;
-  const index = Math.max(1, Number(state.practiceSessionIndex) || 1);
-  // Session counter vs bank size: show "N of M" when N ≤ M, otherwise "Attempt N · M in bank"
-  const progressLabel =
-    total > 0
-      ? index <= total
-        ? `Question ${index} of ${total}`
-        : `Attempt ${index} · ${total} in bank`
-      : `Question ${index}`;
+  const total = state.practiceQuestions.length || 1;
+  const index = Number(state.practiceSessionIndex) || 0;
+  const progressLabel = `第 ${index + 1} / ${total} 题`;
   const submitted = Boolean(state.practiceResult && !state.practiceResult.error);
+  const atLast = index >= total - 1;
+  const atFirst = index <= 0;
+  const nextLabel = atLast ? (submitted ? "完成" : "结束") : "下一题";
   return `
     <header class="exam-bar">
       <div class="exam-bar-inner">
@@ -1732,10 +1807,9 @@ function examBarHtml(q) {
           ${submitted ? `<span class="pill ${state.practiceResult.isCorrect ? "ok" : "bad"}" style="margin-left:6px">${state.practiceResult.isCorrect ? "Correct" : "Incorrect"}</span>` : ""}
         </div>
         <div class="exam-actions">
-          <button type="button" class="btn exam" onclick="navigate('library')">题库</button>
-          <button type="button" class="btn exam" onclick="showPracticeHelp()">Help</button>
-          <button type="button" class="btn exam" onclick="navigate('settings')">设置</button>
-          <button type="button" class="btn exam solid" onclick="nextPractice()">${submitted ? "下一题" : "换一题"}</button>
+          <button type="button" class="btn exam" onclick="exitPractice()">退出</button>
+          <button type="button" class="btn exam" onclick="prevQuestion()" ${atFirst ? "disabled" : ""}>上一题</button>
+          <button type="button" class="btn exam solid" onclick="nextQuestion()">${nextLabel}</button>
         </div>
       </div>
     </header>
@@ -1745,27 +1819,53 @@ function examBarHtml(q) {
 function renderPractice() {
   const q = state.practiceQuestion;
 
+  if (state.practiceFinished) {
+    setPracticeModeClass(false);
+    const answered = state.practiceQuestions.length || 0;
+    const correct = state.practiceQuestions.filter((q) => q._result?.isCorrect).length;
+    const pct = answered > 0 ? Math.round((correct / answered) * 100) : 0;
+    $("app").innerHTML = `
+      <div class="page">
+        <div class="practice-home">
+          <section class="panel practice-summary">
+            <h1>练习完成</h1>
+            <div class="summary-ring ${pct >= 80 ? "ok" : pct >= 50 ? "warn" : "bad"}">
+              <span class="summary-pct">${pct}%</span>
+            </div>
+            <p class="subtle">本次共练习 ${answered} 道题，答对 ${correct} 道。</p>
+            <div class="toolbar" style="justify-content:center;margin-top:18px">
+              <button class="btn primary" type="button" onclick="restartPractice()">再来一轮</button>
+              <button class="btn" type="button" onclick="exitPractice()">返回首页</button>
+            </div>
+          </section>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
   if (!q) {
     setPracticeModeClass(false);
+    const target = state.practiceTarget || 0;
+    const presets = [5, 10, 15, 20];
+    const maxNum = state.practiceTotal || 999;
     $("app").innerHTML = `
       <div class="page">
         <div class="practice-home">
           <section class="panel">
             <h1>开始练习</h1>
-            <p class="subtle">选择练习模式后抽取题目。练习页采用考试风格界面，专注作答。</p>
-            <div class="mode-row">
+            <p class="subtle">选择题数后开始练习，或从题库中勾选指定题目练习。</p>
+            <div class="target-row">
+              <span class="target-label">题数</span>
               <div class="segmented">
-                ${[
-                  ["random", "随机"],
-                  ["wrong", "只练错题"],
-                  ["high_error", "高错误率"],
-                ]
+                ${presets
                   .map(
-                    ([mode, label]) =>
-                      `<button type="button" class="${state.practiceMode === mode ? "active" : ""}" onclick="setPracticeMode('${mode}')">${label}</button>`,
+                    (n) =>
+                      `<button type="button" class="practice-target-btn ${target === n ? "active" : ""}" data-target="${n}" onclick="setPracticeTarget(${n})">${n}</button>`,
                   )
                   .join("")}
               </div>
+              <input type="number" class="target-input" id="practice-target-input" min="1" max="${maxNum}" value="${presets.includes(target) ? "" : target}" placeholder="自定义" onchange="setPracticeTargetFromInput()" />
             </div>
             ${
               state.practiceResult?.error
@@ -1774,7 +1874,7 @@ function renderPractice() {
             }
             <div class="toolbar" style="justify-content:center;margin-top:18px">
               <button class="btn primary" type="button" onclick="nextPractice()">开始练习</button>
-              <button class="btn" type="button" onclick="navigate('library')">从题库选择</button>
+              <button class="btn" type="button" onclick="navigate('practice_select')">从题库选择</button>
             </div>
           </section>
         </div>
@@ -1815,7 +1915,9 @@ function renderPractice() {
 function setPracticeMode(mode) {
   state.practiceMode = mode;
   state.practiceQuestion = null;
+  state.practiceQuestions = [];
   state.practiceResult = null;
+  state.practiceFinished = false;
   setPracticeModeClass(false);
   renderPractice();
 }
@@ -1824,44 +1926,125 @@ function showPracticeHelp() {
   toast("点击词块填入空位；再点空位可撤回。阅读题点选选项后提交。");
 }
 
+function exitPractice() {
+  state.practiceQuestion = null;
+  state.practiceQuestions = [];
+  state.practiceResult = null;
+  state.practiceFinished = false;
+  state.practiceSessionIndex = 0;
+  setPracticeModeClass(false);
+  renderPractice();
+}
+
+function restartPractice() {
+  state.practiceFinished = false;
+  state.practiceQuestion = null;
+  state.practiceQuestions = [];
+  state.practiceResult = null;
+  state.practiceSessionIndex = 0;
+  nextPractice();
+}
+
+function setPracticeTarget(n) {
+  state.practiceTarget = n;
+  document.querySelectorAll(".practice-target-btn").forEach((btn) => {
+    btn.classList.toggle("active", parseInt(btn.dataset.target, 10) === n);
+  });
+  const input = document.getElementById("practice-target-input");
+  if (input) input.value = "";
+}
+
+function setPracticeTargetFromInput() {
+  const input = document.getElementById("practice-target-input");
+  if (!input) return;
+  let val = parseInt(input.value, 10);
+  if (isNaN(val) || val < 1) {
+    toast("请输入有效的题数");
+    input.value = "";
+    return;
+  }
+  if (state.practiceTotal > 0 && val > state.practiceTotal) {
+    val = state.practiceTotal;
+    input.value = val;
+    toast(`题库共有 ${state.practiceTotal} 道题，已调整为 ${val}`);
+  }
+  state.practiceTarget = val;
+  document.querySelectorAll(".practice-target-btn").forEach((btn) => {
+    btn.classList.toggle("active", parseInt(btn.dataset.target, 10) === val);
+  });
+}
+
 async function nextPractice() {
   try {
     if (!state.practiceTotal) await refreshPracticeTotal();
-    // Starting a fresh pull from home resets the session counter
-    if (!state.practiceQuestion) state.practiceSessionIndex = 0;
-    const question = await api(`/api/practice/next?mode=${encodeURIComponent(state.practiceMode)}`);
-    state.practiceSessionIndex = (state.practiceSessionIndex || 0) + 1;
-    loadPracticeQuestion(question, { keepSession: true });
+    const target = Math.max(1, state.practiceTarget || 10);
+    const data = await api(`/api/practice/next?mode=${encodeURIComponent(state.practiceMode)}&count=${target}`);
+    const items = data.items || (data.id ? [data] : []);
+    if (!items.length) {
+      state.practiceQuestion = null;
+      state.practiceQuestions = [];
+      state.practiceResult = { error: "没有符合条件的题目" };
+      state.practiceFinished = false;
+      setPracticeModeClass(false);
+      renderPractice();
+      return;
+    }
+    state.practiceQuestions = items;
+    state.practiceSessionIndex = 0;
+    state.practiceFinished = false;
+    goToQuestion(0);
   } catch (error) {
     state.practiceQuestion = null;
+    state.practiceQuestions = [];
     state.practiceResult = { error: error.message };
+    state.practiceFinished = false;
     setPracticeModeClass(false);
     renderPractice();
   }
 }
 
-async function practiceQuestion(id) {
-  const question = await api(`/api/questions/${id}`);
-  if (!state.practiceTotal) await refreshPracticeTotal();
-  // Entering from library starts a focused single-question session
-  state.practiceSessionIndex = 1;
-  loadPracticeQuestion(question, { keepSession: true });
+function nextQuestion() {
+  const total = state.practiceQuestions.length;
+  const index = Number(state.practiceSessionIndex) || 0;
+  if (index >= total - 1) {
+    state.practiceFinished = true;
+    state.practiceQuestion = null;
+    state.practiceResult = null;
+    setPracticeModeClass(false);
+    renderPractice();
+    return;
+  }
+  goToQuestion(index + 1);
 }
 
-function loadPracticeQuestion(question, options = {}) {
-  state.practiceQuestion = question;
-  state.practiceResult = null;
+function prevQuestion() {
+  const index = Number(state.practiceSessionIndex) || 0;
+  if (index > 0) goToQuestion(index - 1);
+}
+
+function goToQuestion(index) {
+  const q = state.practiceQuestions[index];
+  if (!q) return;
+  state.practiceSessionIndex = index;
+  state.practiceQuestion = q;
+  state.practiceResult = q._result || null;
   state.selectedChoice = "";
   state.completeAnswers = {};
   state.activeBlankIndex = 0;
-  if (question.type === "build_sentence") {
-    state.buildOrderIndices = Array.from({ length: countPracticeBlanks(question) }, () => null);
-  }
-  if (!options.keepSession) {
-    state.practiceSessionIndex = 1;
+  if (q.type === "build_sentence") {
+    state.buildOrderIndices = Array.from({ length: countPracticeBlanks(q) }, () => null);
   }
   setView("practice");
   render();
+}
+
+async function practiceQuestion(id) {
+  const question = await api(`/api/questions/${id}`);
+  if (!state.practiceTotal) await refreshPracticeTotal();
+  state.practiceQuestions = [question];
+  state.practiceSessionIndex = 0;
+  state.practiceFinished = false;
+  goToQuestion(0);
 }
 
 function practiceQuestionHtml(q) {
@@ -2334,6 +2517,7 @@ async function submitPractice() {
       body: JSON.stringify({ answer }),
     });
     state.practiceResult = result;
+    state.practiceQuestion._result = result;
     state.practiceQuestion.stats = result.stats;
     renderPractice();
     // Scroll result into view
@@ -2368,9 +2552,10 @@ function resultHtml(q, result) {
           <p class="article-box">${escapeHtml(q.explanation || "暂无解析。")}</p>
         </div>
         <div class="toolbar">
-          <button class="btn primary" type="button" onclick="nextPractice()">下一题</button>
+          <button class="btn primary" type="button" onclick="nextQuestion()">${(Number(state.practiceSessionIndex) || 0) >= state.practiceQuestions.length - 1 ? "完成" : "下一题"}</button>
+          <button class="btn" type="button" onclick="prevQuestion()" ${(Number(state.practiceSessionIndex) || 0) <= 0 ? "disabled" : ""}>上一题</button>
           <button class="btn" type="button" onclick="retryCurrent()">再练一次</button>
-          <button class="btn ghost" type="button" onclick="navigate('library')">返回题库</button>
+          <button class="btn ghost" type="button" onclick="exitPractice()">退出练习</button>
         </div>
       </div>
     </div>
@@ -2455,7 +2640,15 @@ function answerReviewHtml(q, detail) {
 function retryCurrent() {
   const q = state.practiceQuestion;
   if (!q) return;
-  loadPracticeQuestion(q, { keepSession: true });
+  q._result = null;
+  state.practiceResult = null;
+  state.selectedChoice = "";
+  state.completeAnswers = {};
+  state.activeBlankIndex = 0;
+  if (q.type === "build_sentence") {
+    state.buildOrderIndices = Array.from({ length: countPracticeBlanks(q) }, () => null);
+  }
+  renderPractice();
 }
 
 /* ===================== Settings ===================== */
@@ -2664,6 +2857,7 @@ function render() {
   if (state.view === "login") return renderLogin();
   if (state.view === "import") return renderImport();
   if (state.view === "library") return renderLibrary();
+  if (state.view === "practice_select") return renderPracticeSelect();
   if (state.view === "edit") return renderEdit();
   if (state.view === "practice") return renderPractice();
   if (state.view === "settings") return renderSettings();
@@ -2760,11 +2954,20 @@ window.detectCompleteWordsFromPassage = detectCompleteWordsFromPassage;
 window.syncCompleteWordsFullWords = syncCompleteWordsFullWords;
 window.updateFilter = updateFilter;
 window.debouncedSearch = debouncedSearch;
+window.toggleLibrarySelect = toggleLibrarySelect;
+window.clearLibrarySelection = clearLibrarySelection;
+window.startPracticeFromSelection = startPracticeFromSelection;
 window.editQuestion = editQuestion;
 window.deleteQuestion = deleteQuestion;
 window.practiceQuestion = practiceQuestion;
 window.setPracticeMode = setPracticeMode;
+window.setPracticeTarget = setPracticeTarget;
+window.setPracticeTargetFromInput = setPracticeTargetFromInput;
+window.exitPractice = exitPractice;
+window.restartPractice = restartPractice;
 window.nextPractice = nextPractice;
+window.nextQuestion = nextQuestion;
+window.prevQuestion = prevQuestion;
 window.submitPractice = submitPractice;
 window.fillWord = fillWord;
 window.clearSlot = clearSlot;
