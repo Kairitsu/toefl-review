@@ -1,290 +1,569 @@
 <div align="center">
 
-# TOEFL Review · 托福错题复习系统
+# TOEFL Review
 
-**自托管的托福错题本：粘贴 → 结构化 → 考试风练习 → 盯住薄弱项。**
+**把散落的托福错题，变成真正可以反复练习、回看和复盘的私人题库。**
 
-把乱格式的题目原文变成可检索、可统计、可反复练的私人题库。
+一个轻量、开源、自托管的托福错题复习系统。  
+支持题目结构化导入、考试式练习、即时判分、学习报告和练习记录。
 
-[English](./README.md) · [简体中文](./README_ZH.md) · [日本語](./README_JA.md) · [한국어](./README_KO.md)
+[English](./README.md) · **简体中文** · [日本語](./README_JA.md) · [한국어](./README_KO.md)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.x-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](./docker-compose.yml)
-[![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![SQLite](https://img.shields.io/badge/Storage-SQLite-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 
 </div>
 
 ---
 
-## 为什么需要 TOEFL Review？
+## TOEFL Review 能做什么？
 
-错题本常见下场：截图堆、备忘录、半整理的 Word——真正要「再做一遍」时，几乎帮不上忙。
+很多错题最后都会变成截图、聊天记录、Word 文档或散落在各处的笔记。
 
-**TOEFL Review** 把你粘贴的托福材料变成**结构化私人题库**：
+它们虽然被“收藏”了，却很少真正被重新做一遍。
 
-| 痛点 | 本项目做法 |
-|------|------------|
-| PDF / 笔记复制格式很乱 | 导入预览，保存前可改字段 |
-| 「回头再看」等于不看 | 考试风格练习页，即时判分 |
-| 不知道哪些题还不会 | 次数、正确/错误、错误率、最近练习时间 |
-| 云端刷题 App 锁数据 | 本地 SQLite，文件在自己机器上 |
-| API Key 散落在配置文件 | 密钥加密入库，界面内配置 |
+TOEFL Review 提供了一套完整的错题复习流程：
 
-> 定位：**个人自托管**。一个进程（或一套 Compose），无需外部数据库，默认不必登录注册。
-
----
-
-## 功能一览
-
-### 📥 智能导入
-
-- 粘贴题干、文章、选项、答案、解析——格式可以不完美。
-- 支持**指定题型**或自动识别（三种题型）。
-- 通过任意 **OpenAI 兼容 Chat Completions** 接口做 LLM 结构化。
-- 阅读填词 / 造句等结构化原文可走**本地确定性解析**（尽量不胡编空格）。
-- 流程：**解析 → 预览校正 → 保存进题库**；答案不明确时可标为**待确认**。
-
-### 📚 题库管理
-
-- 按题型筛选，搜索题干 / 文章 / 提示。
-- 按创建时间、错误率、最近练习时间排序。
-- 每题统计，支持练习 / 编辑 / 删除。
-- 高错误率题目高亮提示。
-
-### ✍️ 考试风练习
-
-三种出题模式：
-
-| 模式 | 说明 |
-|------|------|
-| **随机** | 从题库随机抽题 |
-| **只练错题** | 优先抽做过且错过的题 |
-| **高错误率** | 优先抽正确率最差的题 |
-
-交互：
-
-- **阅读选择题** — 点选 A/B/C/D，提交后看解析。
-- **写作造句题** — 点击词库词块填空；模板中的固定短语保留不动。
-- **阅读填词题** — 在短文缺失字母处逐格填写。
-
-每次作答写入 `attempts`，供统计与薄弱复习。
-
-### ⚙️ 自备 LLM
-
-在 **设置** 页配置（不写进源码）：
-
-- API Key（用 `APP_SECRET` 派生 Fernet 加密存储）
-- Base URL 或完整 Chat Completions URL
-- 模型名
-- 可选自定义 JSON 参数
-
-兼容 OpenAI Chat Completions 协议的服务商均可。可在界面内测连通。API Key **不会明文回显**。
-
-### 🔒 偏隐私的默认设计
-
-- 题目、练习记录、设置均在本地 **SQLite**（`data/`）。
-- 密钥放在 `secrets/` 或环境变量，已被 `.gitignore` 忽略。
-- 仅在你主动「调用 LLM 解析」时，才会把粘贴内容发给对应服务商。
-
----
-
-## 支持的题型
-
-覆盖经典阅读选择，以及 **2026 新托福** 风格的造句 / 填词形态：
-
-| 题型 | 代码 | 说明 |
-|------|------|------|
-| 阅读选择题 | `reading_choice` | 文章 + 题干 + A–D 选项 + 答案 + 解析 |
-| 写作造句题 | `build_sentence` | 提问、含空位与固定词的句子模板、词库、正确顺序 |
-| 阅读填词题 | `complete_words` | 短文中缺失字母串；按空依次补全后缀 |
-
-当前界面文案以**简体中文**为主。
-
----
-
-## 架构
-
-```text
-浏览器（静态 SPA）
-   │  HTTP JSON
-   ▼
-Flask + Gunicorn
-   ├── 导入解析（本地规则 + 可选 LLM）
-   ├── 题目 CRUD + 作答判分
-   ├── 设置（API Key 加密）
-   └── SQLite (WAL)  →  ./data/toefl_review.sqlite3
+```mermaid
+flowchart LR
+    A[粘贴错题] --> B[选择题型]
+    B --> C[结构化解析]
+    C --> D[预览并校对]
+    D --> E[保存到私人题库]
+    E --> F[重新练习]
+    F --> G[查看学习报告]
+    G --> H[回顾记录或整轮重练]
 ```
 
-| 层级 | 技术 |
-|------|------|
-| 后端 | Python 3.12、Flask、Gunicorn |
-| 前端 | 原生 HTML / CSS / JS（无构建步骤） |
-| 存储 | SQLite + WAL |
-| 加密 | `cryptography` Fernet（由 `APP_SECRET` 派生） |
-| 部署 | 可选 Docker Compose；默认映射 `127.0.0.1:3219` |
+它不是一个单纯保存题目的电子笔记，而是一个可以长期积累和反复使用的私人练习系统。
+
+---
+
+## 主要功能
+
+### 结构化导入错题
+
+根据题型提供专门的录入表格，不需要把所有内容塞进一个大文本框。
+
+目前支持：
+
+| 题型 | 导入内容 |
+| --- | --- |
+| 阅读选择题 | 标题、文章、问题、A—D 选项、正确答案、解析 |
+| 写作造句题 | 提问内容、句子模板、词库、正确填入顺序、完整句子、解析 |
+| 阅读填词题 | 带下划线空格的短文、答案列表、解析 |
+
+阅读选择题和部分写作造句题可以通过兼容 OpenAI Chat Completions 协议的 LLM 接口进行整理。
+
+阅读填词题会优先根据原文中的下划线位置进行本地解析，尽量避免模型擅自改写短文或凭空增加空格。
+
+解析完成后不会立即入库。你可以先检查和修改结构化结果，确认无误后再保存。
+
+### 私人题库
+
+所有保存的题目都会进入本地题库。
+
+你可以：
+
+- 按题型筛选题目；
+- 搜索题干、文章和其他内容；
+- 按创建时间、错误率或最近练习时间排序；
+- 查看每道题的练习次数、正确次数和错误次数；
+- 单独练习、编辑或删除某道题；
+- 快速发现重复错误率较高的题目；
+- 从题库中勾选指定题目组成一轮练习。
+
+删除题目时，与该题关联的作答记录也会一并删除。
+
+### 接近真实答题方式的练习界面
+
+不同题型使用不同的交互方式，而不是统一显示成普通输入框。
+
+#### 阅读选择题
+
+文章和问题分区展示，直接选择 A、B、C、D 选项。
+
+#### 写作造句题
+
+固定文本保留在句子原位，词库中的词块可以点击或拖动到对应空格中。
+
+#### 阅读填词题
+
+输入框直接出现在短文缺失字母的位置，并按照缺失字母数量显示逐字母输入格。
+
+每次提交后都会立即显示：
+
+- 本题是否正确；
+- 你的答案；
+- 正确答案；
+- 每个空位的具体对错；
+- 题目解析；
+- 该题累计练习统计。
+
+### 自由选择本轮题目
+
+开始练习时，可以选择预设题数，也可以输入自定义题数。
+
+还可以进入题库，手动勾选希望练习的题目，再组成一轮专项练习。
+
+练习过程中支持上一题、下一题、单题重做和提前退出。
+
+### 完整学习报告
+
+完成一轮练习后，系统不会只显示一个正确率数字，而是生成完整的学习报告。
+
+报告包含：
+
+- 本轮总题数；
+- 答对数量；
+- 答错数量；
+- 正确率；
+- 全部、答对、答错分类筛选；
+- 每道题的原题；
+- 你的答案与正确答案；
+- 逐选项或逐空位判定；
+- 题目解析。
+
+可以在题目列表中切换，快速找到本轮出错的位置。
+
+### 练习记录
+
+每轮练习结束后，系统会自动保存练习记录。
+
+练习记录页面会显示：
+
+- 练习时间；
+- 题目数量；
+- 答对和答错数量；
+- 本轮正确率。
+
+点击任意历史记录，可以重新打开当时的完整学习报告，也可以直接重新练习这一整轮题目。
+
+### 自备 LLM 接口
+
+TOEFL Review 不绑定特定模型或服务商。
+
+在网页的“设置”页面中，可以填写：
+
+- API Key；
+- Base URL 或完整请求地址；
+- 模型名称；
+- 自定义 JSON 参数。
+
+只要服务商兼容 OpenAI Chat Completions 请求格式，通常都可以接入。
+
+设置页面还提供连接测试功能，便于在导入题目前检查 URL、模型和 API Key 是否可用。
+
+> LLM 服务本身不包含在本项目中。调用费用、速率限制和数据处理规则由你选择的服务商决定。
+
+### 本地保存与可选登录保护
+
+题目、作答记录、练习报告和系统设置均保存在本地 SQLite 数据库中：
+
+```text
+data/toefl_review.sqlite3
+```
+
+LLM API Key 使用由 `APP_SECRET` 派生的 Fernet 密钥加密后写入数据库，不会在设置页面中明文回显。
+
+你还可以在设置页面中启用访问认证。启用后，访问本系统需要输入统一的用户名和密码。
+
+需要注意：
+
+- 这是个人实例的访问保护，不是多用户账号系统；
+- 内置登录不能代替 HTTPS；
+- 对公网开放时仍应使用 Caddy、Nginx 等反向代理并配置 HTTPS。
 
 ---
 
 ## 快速开始
 
-### 方式 A — Docker Compose（推荐）
+### 使用 Docker Compose 部署
+
+这是最简单、最推荐的运行方式。
+
+#### 1. 准备环境
+
+请先安装：
+
+- Git
+- Docker
+- Docker Compose
+
+当前版本的 Docker Desktop 和大多数 Linux Docker 安装通常已经包含 `docker compose` 命令。
+
+#### 2. 下载项目
 
 ```bash
 git clone https://github.com/Kairitsu/toefl-review.git
 cd toefl-review
+```
 
+#### 3. 创建配置文件
+
+```bash
 mkdir -p secrets data
 cp secrets/app.env.example secrets/app.env
-# 编辑 secrets/app.env，填入足够长的随机 APP_SECRET
-# 已有数据库时请保持 secret 不变，否则无法解密已存 API Key
+```
 
+生成一个随机密钥：
+
+```bash
+openssl rand -hex 32
+```
+
+打开 `secrets/app.env`，把生成的随机字符串填写到等号后面：
+
+```env
+APP_SECRET=这里填写生成的随机字符串
+```
+
+`APP_SECRET` 用于保护 API Key 和登录会话。
+
+项目产生数据后，请不要随意修改它。更换 `APP_SECRET` 会导致数据库中原有的 API Key 无法解密。
+
+#### 4. 启动服务
+
+```bash
 docker compose up -d --build
 ```
 
-访问：**http://127.0.0.1:3219**
+查看运行状态：
 
-健康检查：`GET /api/health`
+```bash
+docker compose ps
+```
 
-### 方式 B — 本地 Python
+查看日志：
+
+```bash
+docker compose logs -f app
+```
+
+#### 5. 打开网页
+
+如果项目运行在当前电脑上，请访问：
+
+```text
+http://127.0.0.1:3219
+```
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+---
+
+## 部署在服务器上
+
+Docker Compose 默认只将服务绑定到服务器本机：
+
+```text
+127.0.0.1:3219
+```
+
+这可以防止应用端口直接暴露在公网。
+
+在 VPS 或云服务器上部署时，建议使用 Caddy 或 Nginx 将域名反向代理到：
+
+```text
+http://127.0.0.1:3219
+```
+
+并为域名启用 HTTPS。
+
+临时访问时，也可以在自己的电脑上建立 SSH 隧道：
+
+```bash
+ssh -L 3219:127.0.0.1:3219 用户名@服务器地址
+```
+
+随后在本机浏览器访问：
+
+```text
+http://127.0.0.1:3219
+```
+
+---
+
+## 第一次使用
+
+启动后建议按照以下顺序操作：
+
+1. 打开“设置”页面；
+2. 填写 LLM 的 API Key、Base URL 和模型名称；
+3. 点击“测试连接”；
+4. 根据需要设置访问用户名和密码；
+5. 进入“导入”页面并选择题型；
+6. 填写或粘贴题目、答案和解析；
+7. 解析并检查预览结果；
+8. 保存到题库；
+9. 进入“练习”页面开始复习。
+
+---
+
+## 更新项目
+
+更新前建议先备份数据库：
+
+```bash
+./scripts/backup-db.sh
+```
+
+然后拉取最新代码并重新构建：
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+查看更新后的运行状态：
+
+```bash
+docker compose ps
+docker compose logs --tail=100 app
+```
+
+---
+
+## 备份与恢复
+
+### 使用备份脚本
+
+在项目根目录运行：
+
+```bash
+./scripts/backup-db.sh
+```
+
+备份文件会保存到：
+
+```text
+data/backups/
+```
+
+### 手动备份
+
+也可以在停止容器后，直接备份整个 `data` 目录：
+
+```bash
+docker compose down
+cp -a data data-backup
+docker compose up -d
+```
+
+### 恢复
+
+停止服务后，将备份的数据库文件恢复为：
+
+```text
+data/toefl_review.sqlite3
+```
+
+然后重新启动：
+
+```bash
+docker compose up -d
+```
+
+恢复旧数据库时，必须继续使用原来的 `APP_SECRET`，否则原先保存的 API Key 无法解密。
+
+---
+
+## 不使用 Docker
+
+项目也可以直接通过 Python 运行。
 
 ```bash
 git clone https://github.com/Kairitsu/toefl-review.git
 cd toefl-review
 
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate
+
 pip install -r requirements.txt
 
 export APP_SECRET="$(openssl rand -hex 32)"
-export DATA_DIR=data
+export DATA_DIR="data"
 
 flask --app app run --host 127.0.0.1 --port 8000
-
-# 生产风格可改用：
-# gunicorn --workers 2 --bind 127.0.0.1:8000 app:app
 ```
 
-访问：**http://127.0.0.1:8000**
+Windows PowerShell 激活虚拟环境时使用：
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+启动后访问：
+
+```text
+http://127.0.0.1:8000
+```
+
+用于长期运行时，建议使用项目 Docker 配置或 Gunicorn，而不是 Flask 自带的开发服务器。
 
 ---
 
-## 配置项
+## 数据和隐私
 
-| 变量 | 必填 | 说明 |
-|------|------|------|
-| `APP_SECRET` | **是** | 长随机串，用于加密 LLM API Key。对**已有数据库必须保持稳定**。 |
-| `DATA_DIR` | 否 | 数据目录（本地默认 `data`；Compose 中为 `/app/data`）。 |
+TOEFL Review 的默认数据流如下：
 
-参考文件：
+- 题目和练习记录保存在自己的 SQLite 数据库中；
+- API Key 加密后保存在数据库中；
+- 浏览器不会重新显示已经保存的完整 API Key；
+- 只有主动调用 LLM 解析时，题目内容才会发送给配置的 LLM 服务商；
+- 项目本身不会自动将题库同步到第三方云端。
 
-- `secrets/app.env.example` → 复制为 `secrets/app.env` 供 Compose 使用  
-- `.env.example` → 本地导出环境变量时参考  
+请勿提交以下内容到 Git 仓库：
 
-LLM 的 **Key / Base URL / 模型 / 自定义参数** 在网页 **设置** 中配置，存入 SQLite（Key 加密）。
-
----
-
-## 日常使用流程
-
-1. **设置** — 填 Base URL、模型、API Key，点连接测试。  
-2. **导入** — 粘贴原文 → 解析 → 预览修改 → 保存。  
-3. **题库** — 检索、修正、对单题直接练习。  
-4. **练习** — 选「随机 / 只练错题 / 高错误率」反复巩固。  
-5. **备份** — 定期备份 SQLite。
-
-```bash
-# 通过 Docker 在线备份（写入 data/backups/）
-./scripts/backup-db.sh
+```text
+data/
+secrets/app.env
+任何 API Key
+数据库文件
+真实登录凭据
 ```
 
 ---
 
-## 目录结构
+## 项目定位与限制
+
+当前版本主要面向个人自托管使用。
+
+它适合：
+
+- 整理自己的托福错题；
+- 在电脑或手机浏览器中反复练习；
+- 使用自己的 LLM API 辅助整理题目；
+- 在自己的服务器上保存和控制数据。
+
+当前版本不是：
+
+- 多用户在线教育平台；
+- 托福题目下载或采集工具；
+- 带有内置大模型额度的商业服务；
+- ETS 官方产品。
+
+---
+
+<details>
+<summary><strong>技术架构</strong></summary>
+
+```mermaid
+flowchart LR
+    A[浏览器<br>原生 HTML / CSS / JavaScript]
+    B[Flask + Gunicorn]
+    C[(SQLite WAL)]
+    D[OpenAI 兼容 LLM API]
+
+    A <-->|HTTP JSON| B
+    B <--> C
+    B -->|仅在解析时调用| D
+```
+
+| 部分 | 技术 |
+| --- | --- |
+| 后端 | Python 3.12、Flask、Gunicorn |
+| 前端 | 原生 HTML、CSS、JavaScript |
+| 数据库 | SQLite，WAL 模式 |
+| API Key 加密 | `cryptography` Fernet |
+| 登录密码 | PBKDF2-SHA256 哈希 |
+| 部署 | Docker Compose |
+| 默认监听 | `127.0.0.1:3219` |
+
+前端没有 Node.js 依赖，也不需要执行打包或构建命令。
+
+</details>
+
+<details>
+<summary><strong>项目目录</strong></summary>
 
 ```text
 toefl-review/
-├── app.py                 # Flask API、导入解析、判分、SQLite
+├── app.py
 ├── static/
-│   ├── index.html         # 页面壳
-│   ├── app.js             # 导入 / 题库 / 练习 / 设置
-│   └── styles.css         # 考试风样式
+│   ├── index.html
+│   ├── app.js
+│   └── styles.css
 ├── scripts/
-│   └── backup-db.sh       # 容器内 SQLite 在线备份
+│   └── backup-db.sh
 ├── secrets/
-│   └── app.env.example    # APP_SECRET 模板（勿提交真实密钥）
+│   └── app.env.example
 ├── docker-compose.yml
 ├── Dockerfile
 ├── requirements.txt
-├── LICENSE                # AGPL-3.0
-├── README.md              # English
-├── README_ZH.md           # 简体中文
-├── README_JA.md           # 日本語
-└── README_KO.md           # 한국어
+├── LICENSE
+├── README.md
+├── README_ZH.md
+├── README_JA.md
+└── README_KO.md
 ```
 
-运行时目录（已忽略提交）：`data/`、`secrets/app.env`、虚拟环境、浏览器测试产物等。
+</details>
 
 ---
 
-## API 一览
+## 常见问题
 
-| 方法 | 路径 | 作用 |
-|------|------|------|
-| `GET` | `/api/health` | 健康检查 |
-| `GET` / `POST` | `/api/settings` | 读取 / 保存 LLM 设置 |
-| `POST` | `/api/settings/test` | 测试连通 |
-| `POST` | `/api/import/parse` | 原文 → 草稿题 |
-| `GET` / `POST` | `/api/questions` | 列表 / 新建 |
-| `GET` / `PUT` / `DELETE` | `/api/questions/<id>` | 读 / 改 / 删 |
-| `GET` | `/api/practice/next` | 抽题（`mode=random\|wrong\|high_error`） |
-| `POST` | `/api/questions/<id>/attempts` | 提交答案并判分 |
+### 必须配置 LLM API 才能使用吗？
 
----
+题库、练习、学习报告和历史记录本身不依赖 LLM。
 
-## 安全提示
+阅读填词题主要通过本地规则解析。格式规范的写作造句题也可以优先使用本地结构化识别。
 
-- 默认只绑定本机（Compose：`127.0.0.1:3219`）。若对公网开放，请自行加反向代理与认证。  
-- 不要提交 `data/`、`secrets/app.env`、API Key、数据库文件。  
-- 改 `APP_SECRET` 会导致已加密 API Key 无法解密。  
-- LLM 提供商会看到你粘贴的内容——只发送你愿意外传的材料。
+阅读选择题等内容的自动整理通常需要配置兼容 OpenAI Chat Completions 的 LLM 接口。
 
----
+### 数据会上传到项目作者的服务器吗？
 
-## 技术取舍（简短）
+不会。
 
-- **无前端构建** — 小 VPS 上也好改、好部署。  
-- **SQLite WAL** — 个人错题本零运维。  
-- **仅 OpenAI 兼容协议** — 一条 HTTP 路径对接多家模型。  
-- **填词优先本地解析** — 空格尽量忠实于原文。
+项目没有作者提供的中央服务器。数据默认保存在部署设备的 SQLite 数据库中。
 
----
+但在调用 LLM 解析时，粘贴的题目会发送给你自己配置的 LLM 服务商。
 
-## 欢迎贡献
+### 可以在手机上使用吗？
 
-欢迎 Issue 与 PR：
+可以。
 
-1. 勿提交密钥与个人 `data/`。  
-2. 变更尽量小而清晰。  
-3. 说明测试方式（本地 Flask 和/或 Docker Compose）。
+页面针对窄屏设备进行了响应式适配。只要手机能够访问部署地址，就可以通过浏览器使用。
+
+### 可以多人注册账号吗？
+
+不可以。
+
+当前登录功能只为整个个人实例设置一组访问凭据，不包含注册、用户隔离和多人题库。
 
 ---
 
-## 许可证
+## 参与项目
 
-本项目采用 **GNU Affero General Public License v3.0（AGPL-3.0）** 开源。
+发现问题或有改进建议时，欢迎提交 Issue。
 
-完整文本见 [`LICENSE`](./LICENSE)。
+提交代码前，请尽量说明：
 
-**简要说明：** 你可以在 AGPL-3.0 下使用、学习、修改与分发本软件。若你将修改后的版本作为网络服务提供给他人使用，必须向该服务的用户提供对应源代码。网络服务场景下的源码义务是 AGPL 的核心条款——商用 SaaS 分发前请仔细阅读全文。
+- 修改解决了什么问题；
+- 是否改变现有数据结构；
+- 是否影响 Docker 部署；
+- 是否在桌面端和手机端完成了基本测试。
+
+---
+
+## 开源许可证
+
+本项目使用 [GNU Affero General Public License v3.0](./LICENSE)。
+
+你可以使用、研究和修改本项目。分发修改版本，或将修改版本作为网络服务提供给他人使用时，需要遵守 AGPL-3.0 的源代码公开要求。
 
 ---
 
 <div align="center">
 
-给真正会「再做一遍」的托福学习者 —— 不是一堆截图文件夹。
-
-**[English](./README.md)** · **[简体中文](./README_ZH.md)** · **[日本語](./README_JA.md)** · **[한국어](./README_KO.md)**
+**不要让错题只停留在“收藏过”。把它重新做一遍。**
 
 </div>
