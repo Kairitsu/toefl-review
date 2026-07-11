@@ -8,7 +8,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py .
+COPY app.py db.py security.py parsing.py grading.py llm.py auth_util.py questions_service.py import_pipeline.py ./
+COPY blueprints ./blueprints
 COPY static ./static
 
 RUN useradd -u 1000 -m appuser && mkdir -p /app/data && chown -R appuser:appuser /app/data

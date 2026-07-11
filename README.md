@@ -304,6 +304,14 @@ Database files
 Real login credentials
 ```
 
+Optional environment variables when running without Compose:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `APP_SECRET` | **Yes** | Long random string used to encrypt the LLM API key. Must stay stable for an existing database. |
+| `DATA_DIR` | No | Data directory (default `data`; Compose uses `/app/data`). |
+| `TRUST_PROXY_COUNT` | No | How many reverse proxies sit in front of the app (default `1`). Enables Werkzeug `ProxyFix` so login rate limits key off the real client IP from `X-Forwarded-For`. Set to `0` if clients hit gunicorn/Flask directly. |
+
 ---
 
 ## Scope and limitations
@@ -336,7 +344,7 @@ Flask + Gunicorn
 | Deployment | Docker Compose |
 | Default address | `127.0.0.1:3219` |
 
-The frontend has no Node.js dependency and requires no build step.
+The frontend has no Node.js dependency and requires no build step. The browser loads `/static/js/main.js` as `type="module"`.
 
 </details>
 
@@ -345,18 +353,41 @@ The frontend has no Node.js dependency and requires no build step.
 
 ```text
 toefl-review/
-├── app.py
+├── app.py                 # Flask app factory (create_app) + re-exports
+├── db.py                  # SQLite get_db / init_db / settings helpers
+├── security.py            # Fernet, password hash, redact
+├── parsing.py             # Import normalize / template / JSON extract
+├── grading.py             # validate_question, grade_attempt
+├── llm.py                 # Provider URL SSRF checks + Chat Completions
+├── auth_util.py           # Session auth + SQLite login throttle
+├── questions_service.py   # Question row mapping / list query
+├── blueprints/
+│   ├── auth.py            # /api/auth/*
+│   ├── settings.py        # /api/settings/*
+│   ├── import_api.py      # /api/import/parse
+│   ├── questions.py       # /api/questions CRUD + attempts
+│   └── practice.py        # /api/practice/*
 ├── static/
-│   ├── index.html
-│   ├── app.js
-│   └── styles.css
+│   ├── index.html         # Shell page (loads ES module entry)
+│   ├── styles.css         # Exam-style UI
+│   └── js/                # Native ES modules — no bundler
+│       ├── main.js        # Bootstrap + data-action event delegation
+│       ├── state.js       # Shared SPA state
+│       ├── api.js         # fetch wrapper
+│       ├── utils.js / ui.js / core.js
+│       └── views/         # import / library / practice / settings
+├── tests/                 # pytest suite (see CONTRIBUTING.md)
 ├── scripts/
 │   └── backup-db.sh
 ├── secrets/
-│   └── app.env.example
+│   └── app.env.example    # APP_SECRET template (do not commit real secrets)
+├── .github/workflows/
+│   └── test.yml           # CI: pytest on push / PR
 ├── docker-compose.yml
 ├── Dockerfile
-├── requirements.txt
+├── requirements.txt       # Runtime deps
+├── requirements-dev.txt   # Dev/test deps (includes pytest)
+├── CONTRIBUTING.md        # Dev setup + how to run tests
 ├── LICENSE
 ├── README.md
 ├── README_ZH.md
@@ -365,6 +396,27 @@ toefl-review/
 ```
 
 </details>
+
+---
+
+## Tests
+
+Automated tests use **pytest**. Each test uses an isolated SQLite file so the real `data/toefl_review.sqlite3` is never touched.
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Coverage includes:
+
+- Pure import/parse helpers (`normalize_sentence_template`, `extract_json_object`, …)
+- `grade_attempt` for all three question types
+- `validate_question` boundary cases
+- Flask `test_client` integration (health, question CRUD, login auth)
+- Import pipeline failure recovery (LLM timeout / wrong type / bad JSON)
+
+Details and isolation rules: [CONTRIBUTING.md](./CONTRIBUTING.md). CI runs the same suite on every push/PR via `.github/workflows/test.yml`.
 
 ---
 
