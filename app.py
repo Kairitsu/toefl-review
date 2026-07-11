@@ -80,10 +80,21 @@ def init_db():
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS practice_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                total INTEGER NOT NULL,
+                correct INTEGER NOT NULL,
+                wrong INTEGER NOT NULL,
+                accuracy REAL NOT NULL,
+                items TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_questions_type ON questions(type);
             CREATE INDEX IF NOT EXISTS idx_questions_updated_at ON questions(updated_at);
             CREATE INDEX IF NOT EXISTS idx_attempts_question_id ON attempts(question_id);
             CREATE INDEX IF NOT EXISTS idx_attempts_created_at ON attempts(created_at);
+            CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON practice_sessions(created_at);
             """
         )
 
@@ -2433,6 +2444,84 @@ def submit_attempt(question_id):
         db.commit()
         stats = stats_for_question(db, question_id)
     return jsonify({"isCorrect": is_correct, "detail": detail, "stats": stats})
+
+
+def session_row_to_summary(row):
+    return {
+        "id": row["id"],
+        "created_at": row["created_at"],
+        "total": int(row["total"]),
+        "correct": int(row["correct"]),
+        "wrong": int(row["wrong"]),
+        "accuracy": float(row["accuracy"]),
+    }
+
+
+def session_row_to_full(row):
+    try:
+        items = json.loads(row["items"]) if row["items"] else []
+    except (ValueError, TypeError):
+        items = []
+    data = session_row_to_summary(row)
+    data["items"] = items
+    return data
+
+
+@app.get("/api/practice/sessions")
+def practice_sessions_list():
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id, created_at, total, correct, wrong, accuracy "
+            "FROM practice_sessions ORDER BY created_at DESC"
+        ).fetchall()
+    return jsonify({"items": [session_row_to_summary(r) for r in rows]})
+
+
+@app.get("/api/practice/sessions/<int:sid>")
+def practice_sessions_detail(sid):
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM practice_sessions WHERE id = ?", (sid,)
+        ).fetchone()
+    if not row:
+        return jsonify({"error": "练习记录不存在"}), 404
+    return jsonify(session_row_to_full(row))
+
+
+@app.post("/api/practice/sessions")
+def practice_sessions_create():
+    payload = request.get_json(force=True, silent=True) or {}
+    total = payload.get("total")
+    correct = payload.get("correct")
+    wrong = payload.get("wrong")
+    accuracy = payload.get("accuracy")
+    items = payload.get("items")
+
+    if not isinstance(total, int) or total < 0:
+        return jsonify({"error": "total 必须是非负整数"}), 400
+    if not isinstance(correct, int) or correct < 0:
+        return jsonify({"error": "correct 必须是非负整数"}), 400
+    if not isinstance(wrong, int) or wrong < 0:
+        return jsonify({"error": "wrong 必须是非负整数"}), 400
+    if not isinstance(accuracy, (int, float)) or accuracy < 0 or accuracy > 1:
+        return jsonify({"error": "accuracy 必须是 0-1 之间的数值"}), 400
+    if not isinstance(items, list) or not items:
+        return jsonify({"error": "items 必须是非空数组"}), 400
+
+    created_at = now_iso()
+    items_json = json.dumps(items, ensure_ascii=False)
+    with get_db() as db:
+        cur = db.execute(
+            """
+            INSERT INTO practice_sessions(created_at, total, correct, wrong, accuracy, items)
+            VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            (created_at, total, correct, wrong, float(accuracy), items_json),
+        )
+        sid = cur.lastrowid
+        db.commit()
+        row = db.execute("SELECT * FROM practice_sessions WHERE id = ?", (sid,)).fetchone()
+    return jsonify(session_row_to_full(row)), 201
 
 
 init_db()

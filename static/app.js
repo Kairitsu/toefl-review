@@ -96,6 +96,11 @@ const state = {
   practiceTotal: 0,
   practiceTarget: 10,
   practiceFinished: false,
+  reportFilter: "all",
+  reportSelectedIndex: 0,
+  practiceHistory: [],
+  viewedSession: null,
+  practiceSavedSessionId: null,
   buildOrderIndices: [],
   activeBlankIndex: 0,
   selectedChoice: "",
@@ -206,6 +211,7 @@ async function navigate(view) {
   render();
   if (view === "library" || view === "practice_select") await loadLibrary();
   if (view === "settings") await loadSettings();
+  if (view === "practice_history") await loadPracticeHistory();
   if (view === "practice" && !state.practiceQuestion) {
     await refreshPracticeTotal();
     render();
@@ -1821,23 +1827,51 @@ function renderPractice() {
 
   if (state.practiceFinished) {
     setPracticeModeClass(false);
-    const answered = state.practiceQuestions.length || 0;
+    const total = state.practiceQuestions.length || 0;
     const correct = state.practiceQuestions.filter((q) => q._result?.isCorrect).length;
-    const pct = answered > 0 ? Math.round((correct / answered) * 100) : 0;
+    const wrong = total - correct;
+    const pct = total > 0 ? Math.round((correct / total) * 100) : 0;
+    const viewingHistory = Boolean(state.viewedSession);
+    const reportTitle = viewingHistory
+      ? `练习记录 · ${formatSessionTime(state.viewedSession.createdAt)}`
+      : "本轮学习报告";
+    if (total === 0) {
+      $("app").innerHTML = `
+        <div class="page">
+          <div class="practice-home">
+            <section class="panel practice-summary">
+              <h1>练习完成</h1>
+              <p class="subtle">本轮没有练习记录。</p>
+              <div class="toolbar" style="justify-content:center;margin-top:18px;flex-wrap:wrap">
+                <button class="btn primary" type="button" onclick="restartPractice()">再来一轮</button>
+                <button class="btn" type="button" onclick="navigate('practice_history')">查看记录列表</button>
+                <button class="btn" type="button" onclick="exitPractice()">返回首页</button>
+              </div>
+            </section>
+          </div>
+        </div>
+      `;
+      return;
+    }
+    const items = filteredReportItems();
+    const selectedIndex = Math.min(state.reportSelectedIndex, total - 1);
+    const selectedQ = state.practiceQuestions[selectedIndex];
     $("app").innerHTML = `
-      <div class="page">
-        <div class="practice-home">
-          <section class="panel practice-summary">
-            <h1>练习完成</h1>
-            <div class="summary-ring ${pct >= 80 ? "ok" : pct >= 50 ? "warn" : "bad"}">
-              <span class="summary-pct">${pct}%</span>
-            </div>
-            <p class="subtle">本次共练习 ${answered} 道题，答对 ${correct} 道。</p>
-            <div class="toolbar" style="justify-content:center;margin-top:18px">
-              <button class="btn primary" type="button" onclick="restartPractice()">再来一轮</button>
-              <button class="btn" type="button" onclick="exitPractice()">返回首页</button>
-            </div>
-          </section>
+      <div class="page report-page">
+        <div class="report-head">
+          <h1>${escapeHtml(reportTitle)}</h1>
+          ${reportStatsHtml(total, correct, wrong, pct)}
+          ${reportFilterHtml()}
+        </div>
+        <div class="report-layout">
+          ${reportListHtml(items, selectedIndex)}
+          ${reportDetailHtml(selectedQ, selectedIndex)}
+        </div>
+        <div class="toolbar" style="justify-content:center;margin-top:18px;flex-wrap:wrap">
+          ${viewingHistory ? "" : `<button class="btn primary" type="button" onclick="restartPractice()">再来一轮</button>`}
+          <button class="btn ${viewingHistory ? "primary" : ""}" type="button" onclick="redoCurrentSession()">重新练习本轮</button>
+          <button class="btn" type="button" onclick="navigate('practice_history')">查看记录列表</button>
+          <button class="btn" type="button" onclick="exitPractice()">返回首页</button>
         </div>
       </div>
     `;
@@ -1872,9 +1906,10 @@ function renderPractice() {
                 ? `<div class="status error">${escapeHtml(state.practiceResult.error)}</div>`
                 : `<div class="status soft-info">题库中约有 ${state.practiceTotal || 0} 道题可供练习。</div>`
             }
-            <div class="toolbar" style="justify-content:center;margin-top:18px">
+            <div class="toolbar" style="justify-content:center;margin-top:18px;flex-wrap:wrap">
               <button class="btn primary" type="button" onclick="nextPractice()">开始练习</button>
               <button class="btn" type="button" onclick="navigate('practice_select')">从题库选择</button>
+              <button class="btn" type="button" onclick="navigate('practice_history')">练习记录</button>
             </div>
           </section>
         </div>
@@ -1932,6 +1967,10 @@ function exitPractice() {
   state.practiceResult = null;
   state.practiceFinished = false;
   state.practiceSessionIndex = 0;
+  state.reportFilter = "all";
+  state.reportSelectedIndex = 0;
+  state.viewedSession = null;
+  state.practiceSavedSessionId = null;
   setPracticeModeClass(false);
   renderPractice();
 }
@@ -1942,7 +1981,49 @@ function restartPractice() {
   state.practiceQuestions = [];
   state.practiceResult = null;
   state.practiceSessionIndex = 0;
+  state.reportFilter = "all";
+  state.reportSelectedIndex = 0;
+  state.viewedSession = null;
+  state.practiceSavedSessionId = null;
   nextPractice();
+}
+
+function stripResult(q) {
+  if (!q) return q;
+  return {
+    id: q.id,
+    type: q.type,
+    title: q.title || "",
+    article: q.article || "",
+    prompt: q.prompt || "",
+    explanation: q.explanation || "",
+    data: q.data,
+    needs_confirmation: Boolean(q.needs_confirmation),
+  };
+}
+
+async function saveCurrentSession() {
+  const qs = state.practiceQuestions;
+  if (!qs || !qs.length) return;
+  const items = qs.map((q) => ({
+    question: stripResult(q),
+    answer: (q._result && q._result.answer) || {},
+    is_correct: Boolean(q._result && q._result.isCorrect),
+    detail: (q._result && q._result.detail) || {},
+  }));
+  const correct = qs.filter((q) => q._result && q._result.isCorrect).length;
+  const total = qs.length;
+  const wrong = total - correct;
+  const accuracy = total > 0 ? correct / total : 0;
+  try {
+    const data = await api("/api/practice/sessions", {
+      method: "POST",
+      body: JSON.stringify({ total, correct, wrong, accuracy, items }),
+    });
+    state.practiceSavedSessionId = data.id;
+  } catch (error) {
+    toast("练习记录保存失败：" + (error.message || "未知错误"));
+  }
 }
 
 function setPracticeTarget(n) {
@@ -2010,8 +2091,13 @@ function nextQuestion() {
     state.practiceFinished = true;
     state.practiceQuestion = null;
     state.practiceResult = null;
+    state.reportFilter = "all";
+    state.reportSelectedIndex = 0;
     setPracticeModeClass(false);
     renderPractice();
+    if (!state.viewedSession && !state.practiceSavedSessionId && total > 0) {
+      saveCurrentSession();
+    }
     return;
   }
   goToQuestion(index + 1);
@@ -2518,6 +2604,7 @@ async function submitPractice() {
     });
     state.practiceResult = result;
     state.practiceQuestion._result = result;
+    state.practiceQuestion._result.answer = answer;
     state.practiceQuestion.stats = result.stats;
     renderPractice();
     // Scroll result into view
@@ -2649,6 +2736,293 @@ function retryCurrent() {
     state.buildOrderIndices = Array.from({ length: countPracticeBlanks(q) }, () => null);
   }
   renderPractice();
+}
+
+/* ===================== Practice report ===================== */
+
+function filteredReportItems() {
+  const filter = state.reportFilter || "all";
+  return state.practiceQuestions
+    .map((q, i) => ({ q, originalIndex: i }))
+    .filter(({ q }) => {
+      const ok = Boolean(q._result?.isCorrect);
+      if (filter === "correct") return ok;
+      if (filter === "wrong") return !ok;
+      return true;
+    });
+}
+
+function reportStatsHtml(total, correct, wrong, pct) {
+  const ringTone = pct >= 80 ? "ok" : pct >= 50 ? "warn" : "bad";
+  return `
+    <div class="report-stats">
+      <div class="report-stat"><span class="label">总题数</span><span class="value">${total}</span></div>
+      <div class="report-stat ok"><span class="label">答对</span><span class="value">${correct}</span></div>
+      <div class="report-stat bad"><span class="label">答错</span><span class="value">${wrong}</span></div>
+      <div class="report-stat ${ringTone}"><span class="label">正确率</span><span class="value">${pct}%</span></div>
+    </div>
+  `;
+}
+
+function reportFilterHtml() {
+  const f = state.reportFilter || "all";
+  const tabs = [["all", "全部"], ["correct", "答对"], ["wrong", "答错"]];
+  return `
+    <div class="report-filter" role="tablist">
+      ${tabs
+        .map(
+          ([key, label]) =>
+            `<button type="button" class="report-filter-btn ${f === key ? "active" : ""}" onclick="setReportFilter('${key}')">${label}</button>`,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function reportListItemStatus(q) {
+  if (!q._result) return { cls: "unanswered", label: "未作答" };
+  return q._result.isCorrect ? { cls: "correct", label: "答对" } : { cls: "wrong", label: "答错" };
+}
+
+function reportListHtml(items, selectedIndex) {
+  if (!items.length) {
+    return `<aside class="report-list"><p class="empty">没有符合条件的题目。</p></aside>`;
+  }
+  return `
+    <aside class="report-list">
+      ${items
+        .map(({ q, originalIndex }) => {
+          const status = reportListItemStatus(q);
+          const isActive = originalIndex === selectedIndex;
+          const preview = (q.title || q.prompt || "题目").replace(/\s+/g, " ").trim();
+          return `
+            <button type="button" class="report-list-item ${status.cls} ${isActive ? "active" : ""}" onclick="selectReportQuestion(${originalIndex})">
+              <span class="report-item-no">${originalIndex + 1}</span>
+              <span class="report-item-body">
+                <span class="report-item-type">${escapeHtml(TYPE_NAMES[q.type] || q.type)}</span>
+                <span class="report-item-title">${escapeHtml(preview.slice(0, 36))}</span>
+              </span>
+              <span class="report-item-status ${status.cls}">${status.label}</span>
+            </button>
+          `;
+        })
+        .join("")}
+    </aside>
+  `;
+}
+
+function questionOriginalHtml(q, detail) {
+  if (q.type === "reading_choice") {
+    const correctKey = detail?.correctAnswer;
+    const selectedKey = detail?.selected;
+    return `
+      <div class="result-block">
+        <h3>原题</h3>
+        ${q.title ? `<p class="report-q-title">${escapeHtml(q.title)}</p>` : ""}
+        ${q.article ? `<p class="article-box">${escapeHtml(q.article)}</p>` : ""}
+        <p class="report-q-prompt">${escapeHtml(q.prompt || "")}</p>
+        <div class="report-options">
+          ${(q.data?.options || [])
+            .map((opt) => {
+              const tags = [];
+              if (opt.key === correctKey) tags.push("is-correct");
+              if (selectedKey && opt.key === selectedKey && opt.key !== correctKey) tags.push("is-wrong");
+              return `
+                <div class="report-option ${tags.join(" ")}">
+                  <span class="option-key">${escapeHtml(opt.key)}</span>
+                  <span class="option-text">${escapeHtml(opt.text)}</span>
+                  ${opt.key === correctKey ? `<span class="report-option-mark correct">正确答案</span>` : ""}
+                  ${selectedKey && opt.key === selectedKey && opt.key !== correctKey ? `<span class="report-option-mark wrong">你的选择</span>` : ""}
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+      </div>
+    `;
+  }
+  if (q.type === "build_sentence") {
+    const template = q.data?.sentenceTemplate || "";
+    const display = template.replace(/\{\{\s*(?:blank|\d+)\s*\}\}|_{2,}/gi, "＿＿＿＿");
+    return `
+      <div class="result-block">
+        <h3>原题</h3>
+        <p class="report-q-prompt">${escapeHtml(q.prompt || "用词库中的词造句。")}</p>
+        <div class="report-template">${escapeHtml(display)}</div>
+        ${(q.data?.wordBank || []).length
+          ? `<div class="report-wordbank">
+              ${q.data.wordBank.map((w) => `<span class="word-token" disabled>${escapeHtml(w)}</span>`).join("")}
+            </div>`
+          : ""}
+      </div>
+    `;
+  }
+  const passage = q.data?.passageText || "";
+  const display = passage.replace(/\[\[\s*[A-Za-z0-9_-]+\s*\]\]/g, "＿＿");
+  return `
+    <div class="result-block">
+      <h3>原题</h3>
+      <p class="report-q-prompt">${escapeHtml(q.prompt || "补全短文中缺失的字母。")}</p>
+      <p class="article-box">${escapeHtml(display)}</p>
+    </div>
+  `;
+}
+
+function reportDetailHtml(q, index) {
+  if (!q) return `<section class="report-detail"><p class="subtle">选择左侧题目查看详情。</p></section>`;
+  const result = q._result;
+  const answered = Boolean(result && !result.error);
+  const ok = Boolean(result?.isCorrect);
+  const status = !answered ? { cls: "unanswered", label: "未作答" } : ok ? { cls: "correct", label: "答对" } : { cls: "wrong", label: "答错" };
+  return `
+    <section class="report-detail">
+      <div class="report-detail-head">
+        <span class="report-detail-no">第 ${index + 1} 题</span>
+        <span class="type-badge">${escapeHtml(TYPE_NAMES[q.type] || q.type)}</span>
+        <span class="report-detail-status ${status.cls}">${status.label}</span>
+      </div>
+      ${questionOriginalHtml(q, result?.detail)}
+      ${answered && result?.detail ? answerReviewHtml(q, result.detail) : `<div class="result-block"><h3>答案</h3><p class="subtle">本题未提交答案。</p></div>`}
+      <div class="result-block">
+        <h3>解析</h3>
+        <p class="article-box">${escapeHtml(q.explanation || "暂无解析。")}</p>
+      </div>
+    </section>
+  `;
+}
+
+function setReportFilter(filter) {
+  state.reportFilter = filter;
+  const items = filteredReportItems();
+  if (items.length && !items.some((it) => it.originalIndex === state.reportSelectedIndex)) {
+    state.reportSelectedIndex = items[0].originalIndex;
+  }
+  renderPractice();
+}
+
+function selectReportQuestion(index) {
+  state.reportSelectedIndex = index;
+  renderPractice();
+  requestAnimationFrame(() => {
+    const detail = document.querySelector(".report-detail");
+    if (detail && window.matchMedia("(max-width: 860px)").matches) {
+      detail.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  });
+}
+
+/* ===================== Practice history ===================== */
+
+async function loadPracticeHistory() {
+  try {
+    const data = await api("/api/practice/sessions");
+    state.practiceHistory = data.items || [];
+  } catch (error) {
+    state.practiceHistory = [];
+    toast("加载练习记录失败：" + (error.message || "未知错误"));
+  }
+  renderPracticeHistory();
+}
+
+function formatSessionTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function renderPracticeHistory() {
+  const items = state.practiceHistory || [];
+  if (!items.length) {
+    $("app").innerHTML = `
+      <div class="page practice-history-page">
+        <div class="page-head">
+          <h1>练习记录</h1>
+          <button class="btn" type="button" onclick="navigate('practice')">返回练习首页</button>
+        </div>
+        <div class="history-empty">
+          <p>还没有练习记录。</p>
+          <p class="subtle">完成一轮练习后，会自动保存到这里。</p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  $("app").innerHTML = `
+    <div class="page practice-history-page">
+      <div class="page-head">
+        <h1>练习记录</h1>
+        <button class="btn" type="button" onclick="navigate('practice')">返回练习首页</button>
+      </div>
+      <div class="history-list">
+        ${items
+          .map((it) => {
+            const pct = Math.round((Number(it.accuracy) || 0) * 100);
+            const ringTone = pct >= 80 ? "ok" : pct >= 50 ? "warn" : "bad";
+            return `
+              <button type="button" class="history-item" onclick="openPracticeSession(${it.id})">
+                <div class="history-item-main">
+                  <span class="history-item-time">${escapeHtml(formatSessionTime(it.created_at))}</span>
+                  <span class="history-item-meta">
+                    <span class="chip">${it.total} 题</span>
+                    <span class="chip ok">对 ${it.correct}</span>
+                    <span class="chip bad">错 ${it.wrong}</span>
+                  </span>
+                </div>
+                <span class="history-item-accuracy ${ringTone}">${pct}%</span>
+              </button>
+            `;
+          })
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+async function openPracticeSession(id) {
+  try {
+    const data = await api(`/api/practice/sessions/${id}`);
+    state.practiceQuestions = (data.items || []).map((it) => ({
+      ...it.question,
+      _result: {
+        isCorrect: Boolean(it.is_correct),
+        detail: it.detail || {},
+        answer: it.answer || {},
+      },
+    }));
+    state.viewedSession = { id: data.id, createdAt: data.created_at };
+    state.practiceFinished = true;
+    state.practiceSessionIndex = 0;
+    state.practiceQuestion = null;
+    state.practiceResult = null;
+    state.reportFilter = "all";
+    state.reportSelectedIndex = 0;
+    state.practiceSavedSessionId = null;
+    setView("practice");
+    setPracticeModeClass(false);
+    render();
+  } catch (error) {
+    toast("加载练习记录失败：" + (error.message || "未知错误"));
+  }
+}
+
+function redoCurrentSession() {
+  if (!state.practiceQuestions.length) return;
+  state.practiceQuestions = state.practiceQuestions.map((q) => stripResult(q));
+  state.practiceSessionIndex = 0;
+  state.practiceFinished = false;
+  state.practiceQuestion = null;
+  state.practiceResult = null;
+  state.viewedSession = null;
+  state.practiceSavedSessionId = null;
+  state.reportFilter = "all";
+  state.reportSelectedIndex = 0;
+  state.selectedChoice = "";
+  state.completeAnswers = {};
+  state.activeBlankIndex = 0;
+  state.buildOrderIndices = [];
+  goToQuestion(0);
 }
 
 /* ===================== Settings ===================== */
@@ -2860,6 +3234,7 @@ function render() {
   if (state.view === "practice_select") return renderPracticeSelect();
   if (state.view === "edit") return renderEdit();
   if (state.view === "practice") return renderPractice();
+  if (state.view === "practice_history") return renderPracticeHistory();
   if (state.view === "settings") return renderSettings();
 }
 
@@ -2977,6 +3352,10 @@ window.dragWord = dragWord;
 window.dropWord = dropWord;
 window.retryCurrent = retryCurrent;
 window.showPracticeHelp = showPracticeHelp;
+window.setReportFilter = setReportFilter;
+window.selectReportQuestion = selectReportQuestion;
+window.openPracticeSession = openPracticeSession;
+window.redoCurrentSession = redoCurrentSession;
 window.saveSettings = saveSettings;
 window.testSettings = testSettings;
 window.saveAuthSettings = saveAuthSettings;
