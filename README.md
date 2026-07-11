@@ -2,298 +2,570 @@
 
 # TOEFL Review
 
-**Self-hosted mistake bank for TOEFL practice — paste, parse, drill, improve.**
+**Turn scattered TOEFL mistakes into a private question bank you can actually practice, revisit, and review.**
 
-Import messy question text → structure it (LLM or local rules) → practice in an exam-style UI → track what you still get wrong.
+A lightweight, open-source, self-hosted TOEFL mistake-review system.  
+It supports structured imports, exam-style practice, instant grading, study reports, and practice history.
 
-[English](./README.md) · [简体中文](./README_ZH.md) · [日本語](./README_JA.md) · [한국어](./README_KO.md)
+**English** · [简体中文](./README_ZH.md) · [日本語](./README_JA.md) · [한국어](./README_KO.md)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.x-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](./docker-compose.yml)
-[![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![SQLite](https://img.shields.io/badge/Storage-SQLite-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 
 </div>
 
 ---
 
-## Why TOEFL Review?
+## What does TOEFL Review do?
 
-Most “wrong-answer notebooks” are screenshots, sticky notes, or half-sorted Word docs. When you need to **re-drill** a reading choice, a Build-a-Sentence item, or a Complete-the-Words passage, that pile does not help.
+Mistakes often end up as screenshots, chat messages, Word files, or notes scattered across different apps.
 
-**TOEFL Review** turns pasted exam material into a **private, structured question bank** you can practice anytime:
+They may be “saved,” but they are rarely practiced again.
 
-| Pain | What this app does |
-|------|--------------------|
-| Messy copy-paste from PDFs / notes | Structured import with preview & edit before save |
-| “I’ll review later” never happens | Exam-style practice with immediate grading |
-| No idea which items are still weak | Stats: attempts, accuracy, error rate, last practice |
-| Cloud flashcard apps lock your data | Local SQLite — your machine, your files |
-| API keys scattered in config files | Encrypted API key in the DB; settings in the UI |
+TOEFL Review provides a complete review workflow:
 
-> Built for **self-hosting**: one process (or one Compose stack), no external database, no account system required for personal use.
-
----
-
-## Features
-
-### 📥 Smart import
-
-- Paste raw stems, passages, options, answers, and explanations — format can be imperfect.
-- **Type hint** or auto-detect among three supported types.
-- **LLM structuring** via any OpenAI-compatible Chat Completions endpoint.
-- **Deterministic local parsers** for structured Complete the Words / Build a Sentence input (no invented blanks).
-- Preview → fix fields → **Save to bank**. Items can be flagged **needs confirmation** when answers are ambiguous.
-
-### 📚 Question library
-
-- Filter by type, search title / passage / prompt.
-- Sort by created time, error rate, or last practice.
-- Per-item stats and one-click practice / edit / delete.
-- High-error items are visually highlighted.
-
-### ✍️ Exam-style practice
-
-Three practice modes:
-
-| Mode | Behavior |
-|------|----------|
-| **Random** | Draw any question at random |
-| **Wrong only** | Prefer items you have missed before |
-| **High error rate** | Prefer items with the worst accuracy |
-
-Interactive UIs:
-
-- **Reading choice** — select A/B/C/D, submit, see explanation.
-- **Build a Sentence** — tap word bank chunks into blanks; fixed template text stays in place.
-- **Complete the Words** — letter-level blanks in the passage.
-
-Every attempt is stored for stats and weak-item review.
-
-### ⚙️ Bring your own LLM
-
-Configure in the **Settings** page (not in source code):
-
-- API Key (encrypted at rest with `APP_SECRET`)
-- Base URL / full Chat Completions URL
-- Model name
-- Optional custom JSON parameters
-
-Supports providers that speak the **OpenAI Chat Completions** protocol. Connection can be tested from the UI. The API key is never echoed back in plaintext.
-
-### 🔒 Privacy-minded defaults
-
-- All questions, attempts, and settings live in **local SQLite** under `data/`.
-- Secrets stay in `secrets/` (Compose) or environment variables — gitignored.
-- LLM only sees what you paste for import (and only when you trigger parse).
-
----
-
-## Supported question types
-
-Aligned with classic reading practice and **2026-style** TOEFL writing/reading item shapes:
-
-| Type | Code | Description |
-|------|------|-------------|
-| Reading multiple choice | `reading_choice` | Passage + stem + A–D options + answer + analysis |
-| Build a Sentence | `build_sentence` | Prompt, sentence template with blanks & fixed phrases, word bank, correct order |
-| Complete the Words | `complete_words` | Passage with missing letter runs; fill missing suffixes in order |
-
----
-
-## Architecture
-
-```text
-Browser (static SPA)
-   │  HTTP JSON
-   ▼
-Flask + Gunicorn
-   ├── Import parse (local rules + optional LLM)
-   ├── Question CRUD + attempt grading
-   ├── Settings (Fernet-encrypted API key)
-   └── SQLite (WAL)  →  ./data/toefl_review.sqlite3
+```mermaid
+flowchart LR
+    A[Paste a question] --> B[Choose the type]
+    B --> C[Structure the content]
+    C --> D[Preview and correct]
+    D --> E[Save to your private bank]
+    E --> F[Practice again]
+    F --> G[Read the study report]
+    G --> H[Review history or redo the session]
 ```
 
-| Layer | Stack |
-|-------|--------|
-| Backend | Python 3.12, Flask, Gunicorn |
-| Frontend | Vanilla HTML / CSS / JS (no build step) |
-| Storage | SQLite + WAL |
-| Crypto | `cryptography` Fernet derived from `APP_SECRET` |
-| Deploy | Docker Compose (optional), host port `127.0.0.1:3219` by default |
+It is not merely a place to store questions. It is a personal practice system designed for long-term accumulation and repeated review.
+
+---
+
+## Main features
+
+### Structured question import
+
+Each question type has its own input form, so you do not need to force every field into one large text box.
+
+Currently supported:
+
+| Question type | Import fields |
+| --- | --- |
+| Reading multiple choice | Title, passage, question, A–D options, correct answer, explanation |
+| Build a Sentence | Prompt, sentence template, word bank, correct order, complete sentence, explanation |
+| Complete the Words | Passage with underscore blanks, answer list, explanation |
+
+Reading multiple-choice questions and some Build a Sentence questions can be organized through any LLM endpoint compatible with the OpenAI Chat Completions protocol.
+
+Complete the Words questions are primarily parsed locally from underscore positions in the original passage. This reduces the risk of an LLM rewriting the passage or inventing new blanks.
+
+Parsed content is not saved immediately. You can review and edit every structured field before adding the question to your bank.
+
+### Private question library
+
+Every saved question is stored in the local question library.
+
+You can:
+
+- Filter by question type;
+- Search prompts, passages, and other content;
+- Sort by creation time, error rate, or most recent practice;
+- View attempts, correct answers, and incorrect answers for each question;
+- Practice, edit, or delete an individual question;
+- Spot questions with a high repeated-error rate;
+- Select specific questions and combine them into a practice session.
+
+Deleting a question also deletes the attempt records associated with that question.
+
+### Practice interfaces designed for each question type
+
+Each question type uses a dedicated interaction model instead of a generic text field.
+
+#### Reading multiple choice
+
+The passage and question are displayed in separate areas. Select A, B, C, or D directly.
+
+#### Build a Sentence
+
+Fixed text stays in its original position. Word-bank chunks can be clicked or dragged into the matching blanks.
+
+#### Complete the Words
+
+Letter cells appear directly where letters are missing in the passage, with one cell for each missing letter.
+
+After every submission, the app immediately shows:
+
+- Whether the answer is correct;
+- Your answer;
+- The correct answer;
+- Per-option or per-blank feedback;
+- The explanation;
+- Cumulative statistics for that question.
+
+### Choose the questions for each session
+
+You can start with a preset number of questions or enter a custom amount.
+
+You can also open the library, manually select specific questions, and create a focused practice session.
+
+During practice, you can move backward and forward, retry the current question, or exit early.
+
+### Complete study reports
+
+At the end of a session, TOEFL Review generates a full study report instead of showing only an accuracy percentage.
+
+The report includes:
+
+- Total questions;
+- Correct answers;
+- Incorrect answers;
+- Accuracy;
+- Filters for all, correct, and incorrect questions;
+- The original content of each question;
+- Your answer and the correct answer;
+- Per-option or per-blank results;
+- The explanation.
+
+You can switch between questions in the report and quickly locate every mistake from the session.
+
+### Practice history
+
+Each completed practice session is saved automatically.
+
+The history page shows:
+
+- Practice time;
+- Number of questions;
+- Correct and incorrect totals;
+- Session accuracy.
+
+Open any historical session to view its full report again, or redo the entire session with the same questions.
+
+### Bring your own LLM
+
+TOEFL Review is not tied to a particular model or provider.
+
+The Settings page accepts:
+
+- API Key;
+- Base URL or full request URL;
+- Model name;
+- Optional custom JSON parameters.
+
+Providers that implement the OpenAI Chat Completions request format will generally work.
+
+A built-in connection test lets you verify the URL, model, and API Key before importing questions.
+
+> The project does not include an LLM service or usage quota. Pricing, rate limits, and data-processing policies are determined by your chosen provider.
+
+### Local storage and optional login protection
+
+Questions, attempts, practice reports, and settings are stored in a local SQLite database:
+
+```text
+data/toefl_review.sqlite3
+```
+
+The LLM API Key is encrypted with Fernet using a key derived from `APP_SECRET`. It is never displayed back in plaintext on the Settings page.
+
+You can also enable access authentication in Settings. Once enabled, the instance requires a shared username and password.
+
+Important limitations:
+
+- This protects one personal instance; it is not a multi-user account system;
+- The built-in login does not replace HTTPS;
+- Public deployments should still use a reverse proxy such as Caddy or Nginx with HTTPS enabled.
+
+> The current web interface is primarily written in Simplified Chinese. The documentation is multilingual, but the application UI has not yet been fully internationalized.
 
 ---
 
 ## Quick start
 
-### Option A — Docker Compose (recommended)
+### Deploy with Docker Compose
+
+This is the simplest and recommended way to run the project.
+
+#### 1. Install the prerequisites
+
+You need:
+
+- Git
+- Docker
+- Docker Compose
+
+Current Docker Desktop releases and most modern Linux Docker installations already include the `docker compose` command.
+
+#### 2. Download the project
 
 ```bash
 git clone https://github.com/Kairitsu/toefl-review.git
 cd toefl-review
+```
 
+#### 3. Create the configuration file
+
+```bash
 mkdir -p secrets data
 cp secrets/app.env.example secrets/app.env
-# Edit secrets/app.env and set a long random APP_SECRET
-# Keep the same secret for the lifetime of an existing database.
+```
 
+Generate a random secret:
+
+```bash
+openssl rand -hex 32
+```
+
+Open `secrets/app.env` and place the generated value after the equals sign:
+
+```env
+APP_SECRET=replace-this-with-the-generated-random-value
+```
+
+`APP_SECRET` protects the stored API Key and login sessions.
+
+Once the project contains data, keep this value stable. Changing `APP_SECRET` prevents the app from decrypting an API Key already stored in the database.
+
+#### 4. Start the service
+
+```bash
 docker compose up -d --build
 ```
 
-Open: **http://127.0.0.1:3219**
+Check the status:
 
-Health check: `GET /api/health`
+```bash
+docker compose ps
+```
 
-### Option B — Local Python
+View logs:
+
+```bash
+docker compose logs -f app
+```
+
+#### 5. Open the web app
+
+When running on your current computer, open:
+
+```text
+http://127.0.0.1:3219
+```
+
+Stop the service with:
+
+```bash
+docker compose down
+```
+
+---
+
+## Deploying on a server
+
+Docker Compose binds the service to the server's local interface by default:
+
+```text
+127.0.0.1:3219
+```
+
+This prevents the application port from being exposed directly to the public internet.
+
+For a VPS or cloud server, use Caddy or Nginx to reverse proxy your domain to:
+
+```text
+http://127.0.0.1:3219
+```
+
+Enable HTTPS for the domain.
+
+For temporary access, create an SSH tunnel from your own computer:
+
+```bash
+ssh -L 3219:127.0.0.1:3219 username@server-address
+```
+
+Then open this address locally:
+
+```text
+http://127.0.0.1:3219
+```
+
+---
+
+## First-time setup
+
+A practical first-run sequence is:
+
+1. Open Settings;
+2. Enter the LLM API Key, Base URL, and model name;
+3. Run the connection test;
+4. Optionally configure an access username and password;
+5. Open Import and choose the question type;
+6. Enter or paste the question, answer, and explanation;
+7. Parse the content and review the preview;
+8. Save the question to the library;
+9. Open Practice and begin reviewing.
+
+---
+
+## Updating the project
+
+Back up the database before updating:
+
+```bash
+./scripts/backup-db.sh
+```
+
+Then pull the latest code and rebuild:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+Check the updated service:
+
+```bash
+docker compose ps
+docker compose logs --tail=100 app
+```
+
+---
+
+## Backup and restore
+
+### Backup script
+
+Run this command from the project root:
+
+```bash
+./scripts/backup-db.sh
+```
+
+Backups are written to:
+
+```text
+data/backups/
+```
+
+### Manual backup
+
+You can also stop the containers and copy the entire `data` directory:
+
+```bash
+docker compose down
+cp -a data data-backup
+docker compose up -d
+```
+
+### Restore
+
+Stop the service and restore the database file to:
+
+```text
+data/toefl_review.sqlite3
+```
+
+Then start the service again:
+
+```bash
+docker compose up -d
+```
+
+When restoring an existing database, continue using its original `APP_SECRET`, or the previously stored API Key cannot be decrypted.
+
+---
+
+## Running without Docker
+
+The project can also run directly with Python.
 
 ```bash
 git clone https://github.com/Kairitsu/toefl-review.git
 cd toefl-review
 
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate
+
 pip install -r requirements.txt
 
 export APP_SECRET="$(openssl rand -hex 32)"
-export DATA_DIR=data
+export DATA_DIR="data"
 
-# Development server
 flask --app app run --host 127.0.0.1 --port 8000
-
-# Or production-style
-# gunicorn --workers 2 --bind 127.0.0.1:8000 app:app
 ```
 
-Open: **http://127.0.0.1:8000**
+On Windows PowerShell, activate the virtual environment with:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+For long-running deployments, use the included Docker configuration or Gunicorn rather than Flask's development server.
 
 ---
 
-## Configuration
+## Data and privacy
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `APP_SECRET` | **Yes** | Long random string. Used to encrypt the LLM API key. **Must stay stable** for an existing database or stored keys cannot be decrypted. |
-| `DATA_DIR` | No | Data directory (default `data`; Compose uses `/app/data`). |
+The default data flow is:
 
-Example files:
+- Questions and practice records stay in your SQLite database;
+- The API Key is encrypted before being stored;
+- The browser does not display the complete saved API Key again;
+- Question content is sent to an LLM provider only when you explicitly run LLM parsing;
+- The project does not automatically synchronize your question bank to a third-party cloud service.
 
-- `secrets/app.env.example` → copy to `secrets/app.env` for Compose
-- `.env.example` → reference for local exports
+Never commit the following files or values:
 
-LLM **API Key / Base URL / model / custom params** are configured in the web **Settings** UI and stored in SQLite (key encrypted).
-
----
-
-## Day-to-day workflow
-
-1. **Settings** — set provider Base URL, model, and API key; run connection test.
-2. **Import** — paste a raw question → parse (LLM or local) → preview/edit → save.
-3. **Library** — browse, search, fix, or drill a single item.
-4. **Practice** — pick Random / Wrong / High error rate and grind until stats improve.
-5. **Backup** — snapshot SQLite when you care about your bank.
-
-```bash
-# Offline backup via Docker (writes under data/backups/)
-./scripts/backup-db.sh
+```text
+data/
+secrets/app.env
+API keys
+Database files
+Real login credentials
 ```
 
 ---
 
-## Project layout
+## Scope and limitations
+
+The current version is designed primarily for personal self-hosting.
+
+It is suitable for:
+
+- Organizing your own TOEFL mistakes;
+- Practicing repeatedly in desktop or mobile browsers;
+- Using your own LLM API to help structure questions;
+- Keeping and controlling data on your own server.
+
+It is not:
+
+- A multi-user online learning platform;
+- A TOEFL question downloading or scraping tool;
+- A commercial service with included LLM credits;
+- An official ETS product.
+
+---
+
+<details>
+<summary><strong>Technical architecture</strong></summary>
+
+```mermaid
+flowchart LR
+    A[Browser<br>Vanilla HTML / CSS / JavaScript]
+    B[Flask + Gunicorn]
+    C[(SQLite WAL)]
+    D[OpenAI-compatible LLM API]
+
+    A <-->|HTTP JSON| B
+    B <--> C
+    B -->|Only during parsing| D
+```
+
+| Component | Technology |
+| --- | --- |
+| Backend | Python 3.12, Flask, Gunicorn |
+| Frontend | Vanilla HTML, CSS, JavaScript |
+| Database | SQLite in WAL mode |
+| API Key encryption | `cryptography` Fernet |
+| Login password | PBKDF2-SHA256 hash |
+| Deployment | Docker Compose |
+| Default binding | `127.0.0.1:3219` |
+
+The frontend has no Node.js dependency and requires no bundling or build step.
+
+</details>
+
+<details>
+<summary><strong>Project structure</strong></summary>
 
 ```text
 toefl-review/
-├── app.py                 # Flask API, import parsers, grading, SQLite
+├── app.py
 ├── static/
-│   ├── index.html         # Shell page
-│   ├── app.js             # SPA views: import / library / practice / settings
-│   └── styles.css         # Exam-style UI
+│   ├── index.html
+│   ├── app.js
+│   └── styles.css
 ├── scripts/
-│   └── backup-db.sh       # SQLite online backup inside the app container
+│   └── backup-db.sh
 ├── secrets/
-│   └── app.env.example    # APP_SECRET template (do not commit real secrets)
+│   └── app.env.example
 ├── docker-compose.yml
 ├── Dockerfile
 ├── requirements.txt
-├── LICENSE                # AGPL-3.0
-├── README.md              # English
-├── README_ZH.md           # 简体中文
-├── README_JA.md           # 日本語
-└── README_KO.md           # 한국어
+├── LICENSE
+├── README.md
+├── README_ZH.md
+├── README_JA.md
+└── README_KO.md
 ```
 
-Runtime (gitignored): `data/`, `secrets/app.env`, virtualenv, browser test artifacts.
+</details>
 
 ---
 
-## API sketch
+## Frequently asked questions
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/api/health` | Liveness |
-| `GET` / `POST` | `/api/settings` | Read / save LLM settings |
-| `POST` | `/api/settings/test` | Test provider connectivity |
-| `POST` | `/api/import/parse` | Parse raw text into a draft question |
-| `GET` / `POST` | `/api/questions` | List / create |
-| `GET` / `PUT` / `DELETE` | `/api/questions/<id>` | Read / update / delete |
-| `GET` | `/api/practice/next` | Next item (`mode=random\|wrong\|high_error`) |
-| `POST` | `/api/questions/<id>/attempts` | Submit answer & grade |
+### Is an LLM API required?
 
----
+The question library, practice system, study reports, and practice history do not depend on an LLM.
 
-## Security notes
+Complete the Words questions are primarily parsed with local rules. Well-structured Build a Sentence input can also use local structured parsing.
 
-- Prefer binding to **localhost** (Compose already maps `127.0.0.1:3219`). Put a reverse proxy + auth in front if you expose it on a network.
-- Never commit `data/`, `secrets/app.env`, API keys, or database files.
-- Changing `APP_SECRET` after keys are stored will break decryption of the saved API key.
-- Treat LLM providers as third parties: only paste content you are willing to send to that provider.
+Automatic organization of Reading multiple-choice questions and other unstructured content generally requires an OpenAI Chat Completions-compatible LLM endpoint.
 
----
+### Is my data uploaded to the project author's server?
 
-## Tech choices (short)
+No.
 
-- **No frontend build** — easy to read, fork, and self-host on a small VPS.
-- **SQLite WAL** — zero ops for a personal mistake bank.
-- **OpenAI-compatible only** — one HTTP path, many providers.
-- **Local parse first** where possible for Complete the Words so blanks stay faithful to the source text.
+The project has no central server operated by the author. Data is stored in the SQLite database on the machine where you deploy it.
 
----
+However, when you run LLM parsing, the pasted question content is sent to the LLM provider you configured.
 
-## Roadmap ideas (community welcome)
+### Can I use it on a phone?
 
-- Spaced-repetition scheduling beyond error-rate modes  
-- Batch import / export (JSON)  
-- Tags & custom collections  
-- Multi-user auth for shared family/class instances  
-- Official UI i18n (current UI copy is primarily Chinese)
+Yes.
+
+The interface includes responsive layouts for narrow screens. A phone can use the app through a browser as long as it can reach the deployment address.
+
+### Can multiple people register accounts?
+
+No.
+
+The current authentication feature configures one shared credential for the entire personal instance. It does not provide registration, user isolation, or separate question banks.
 
 ---
 
 ## Contributing
 
-Issues and pull requests are welcome. Please:
+Issues and improvement proposals are welcome.
 
-1. Keep secrets and personal `data/` out of commits.
-2. Prefer small, focused changes.
-3. Describe how you tested (local Flask and/or Docker Compose).
+When submitting code, please describe:
+
+- What problem the change solves;
+- Whether it changes the existing data structure;
+- Whether it affects Docker deployment;
+- Whether basic desktop and mobile testing was completed.
 
 ---
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+This project is licensed under the [GNU Affero General Public License v3.0](./LICENSE).
 
-See the full text in [`LICENSE`](./LICENSE).
-
-**In short:** you may use, study, modify, and share this software under AGPL-3.0. If you run a modified version as a network service, you must offer the corresponding source to users of that service. Network-use source obligations are a core part of AGPL — please read the license before commercial SaaS redistribution.
+You may use, study, and modify the project. If you distribute a modified version or provide it to others as a network service, you must comply with the AGPL-3.0 source-code disclosure requirements.
 
 ---
 
 <div align="center">
 
-Made for TOEFL learners who keep a real mistake bank — not a folder of screenshots.
-
-**[English](./README.md)** · **[简体中文](./README_ZH.md)** · **[日本語](./README_JA.md)** · **[한국어](./README_KO.md)**
+**Do not let a mistake remain merely “saved.” Practice it again.**
 
 </div>
