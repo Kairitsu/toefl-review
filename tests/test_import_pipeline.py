@@ -74,13 +74,18 @@ class TestGeneralFlow:
 
     def test_llm_wrong_type(self, monkeypatch):
         # User forced reading_choice but LLM returned build_sentence.
-        # Pipeline must NOT粗暴 convert; it extracts per forced type and warns.
+        # Wrong type is invalid: discard LLM payload entirely (no field remapping).
         set_llm(
             monkeypatch,
             {
                 "type": "build_sentence",
-                "prompt": "ignored",
-                "data": {"sentenceTemplate": "{{blank}}", "wordBank": ["x"]},
+                "prompt": "POLLUTED_PROMPT",
+                "article": "POLLUTED_ARTICLE",
+                "data": {
+                    "sentenceTemplate": "{{blank}}",
+                    "wordBank": ["x"],
+                    "correctOrder": ["x"],
+                },
             },
         )
         r = import_pipeline.parse_import(
@@ -89,8 +94,12 @@ class TestGeneralFlow:
         )
         assert r["draft"]["type"] == "reading_choice"
         assert any("LLM 返回题型 build_sentence" in w for w in r["validation"]["warnings"])
-        # reading_choice fields come from local fallback (LLM had none)
+        assert any("视为无效" in w for w in r["validation"]["warnings"])
+        # All fields from local fallback — no cross-type pollution
+        assert r["draft"]["prompt"] == "Q?"
+        assert r["draft"]["article"] == "Art"
         assert r["draft"]["data"]["correctAnswer"] == "C"
+        assert "POLLUTED" not in (r["draft"]["prompt"] + r["draft"]["article"])
 
     def test_llm_empty_fields(self, monkeypatch):
         set_llm(monkeypatch, {"type": "reading_choice", "data": {}})
@@ -143,6 +152,56 @@ class TestGeneralFlow:
         r = import_pipeline.parse_import(raw, "reading_choice")
         assert r["rawText"] == raw
         assert r["draft"]["article"] == "Art"
+
+    def test_llm_missing_type_still_used_under_forced_hint(self, monkeypatch):
+        # LLM omits type but returns valid reading_choice fields; typeHint locks type.
+        set_llm(
+            monkeypatch,
+            {
+                "article": "Art from LLM",
+                "prompt": "Q from LLM?",
+                "data": {
+                    "options": [
+                        {"key": "A", "text": "a"},
+                        {"key": "B", "text": "b"},
+                        {"key": "C", "text": "c"},
+                        {"key": "D", "text": "d"},
+                    ],
+                    "correctAnswer": "A",
+                },
+            },
+        )
+        r = import_pipeline.parse_import("local", "reading_choice")
+        assert r["draft"]["type"] == "reading_choice"
+        assert r["draft"]["article"] == "Art from LLM"
+        assert r["draft"]["data"]["correctAnswer"] == "A"
+
+    def test_chains_do_not_cross_wire(self, monkeypatch):
+        # Forced build_sentence must never produce complete_words / reading_choice data shapes
+        # even if LLM returns complete_words payload.
+        set_llm(
+            monkeypatch,
+            {
+                "type": "complete_words",
+                "data": {
+                    "passageText": "civiliza[[1]]",
+                    "blanks": [
+                        {"id": "1", "prefix": "civiliza", "answer": "tion", "fullWord": "civilization"}
+                    ],
+                },
+            },
+        )
+        raw = (
+            "提问者：What did Maria do?\n"
+            "句子模板：____ went to the ____.\n"
+            "词库：Maria, store, John, park\n"
+            "正确答案：Maria went to the store."
+        )
+        r = import_pipeline.parse_import(raw, "build_sentence")
+        assert r["draft"]["type"] == "build_sentence"
+        assert "blanks" not in r["draft"]["data"]
+        assert "options" not in r["draft"]["data"]
+        assert r["draft"]["data"]["correctOrder"] == ["Maria", "store"]
 
 
 # ---------------------------------------------------------------------------
@@ -714,3 +773,245 @@ class TestCompleteWords:
         assert b[0]["answer"] == "tion"
         assert b[1]["answer"] == "tems"
         assert r["draft"]["explanation"] == "LLM expl"
+
+
+# ---------------------------------------------------------------------------
+# complete_words LLM failure shapes — must never raise; local recovers
+# ---------------------------------------------------------------------------
+
+COMPLETE_WORDS_RAW = (
+    "题目/原始短文：\n"
+    "Trade in the ancient Middle East played a crucial role in the development of "
+    "civilizations. Merchants exc______ goods such as tex____, spices, and met___ "
+    "across vast dis______.\n\n"
+    "答案：\n"
+    "1. hanged\n"
+    "2. tiles\n"
+    "3. als\n"
+    "4. tances\n\n"
+    "解析：\n"
+    "exchanged / textiles / metals / distances"
+)
+
+
+class TestCompleteWordsLlmFailureShapes:
+    """Every expected-bad LLM payload must yield HTTP-safe 200-path drafts via local."""
+
+    def _assert_local_trade_passage(self, r):
+        assert r["draft"]["type"] == "complete_words"
+        b = r["draft"]["data"]["blanks"]
+        assert len(b) == 4
+        assert b[0]["prefix"] == "exc"
+        assert b[0]["answer"] == "hanged"
+        assert b[0]["fullWord"] == "exchanged"
+        assert b[1]["fullWord"] == "textiles"
+        assert b[2]["fullWord"] == "metals"
+        assert b[3]["fullWord"] == "distances"
+        assert r["validation"]["ok"] is True
+        assert r["rawText"]  # original not lost
+
+    def test_llm_full_valid_object(self, monkeypatch):
+        set_llm(
+            monkeypatch,
+            {
+                "type": "complete_words",
+                "explanation": "from llm",
+                "data": {
+                    "passageText": (
+                        "Trade in the ancient Middle East played a crucial role in the development of "
+                        "civilizations. Merchants exc[[1]] goods such as tex[[2]], spices, and met[[3]] "
+                        "across vast dis[[4]]."
+                    ),
+                    "blanks": [
+                        {"id": "1", "prefix": "exc", "answer": "hanged", "fullWord": "exchanged"},
+                        {"id": "2", "prefix": "tex", "answer": "tiles", "fullWord": "textiles"},
+                        {"id": "3", "prefix": "met", "answer": "als", "fullWord": "metals"},
+                        {"id": "4", "prefix": "dis", "answer": "tances", "fullWord": "distances"},
+                    ],
+                },
+            },
+        )
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        self._assert_local_trade_passage(r)
+
+    def test_llm_top_level_array(self, monkeypatch):
+        set_llm(monkeypatch, [{"type": "complete_words", "data": {}}])
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        self._assert_local_trade_passage(r)
+        assert any("非对象" in w or "本地" in w for w in r["validation"]["warnings"])
+
+    def test_llm_null_payload(self, monkeypatch):
+        # call_llm returns None for null; pipeline must local-fallback
+        set_llm(monkeypatch, None, ["LLM 返回了无法解析的内容（null 或空）"])
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        self._assert_local_trade_passage(r)
+        assert any("LLM 解析失败" in w for w in r["validation"]["warnings"])
+
+    def test_llm_string_payload(self, monkeypatch):
+        set_llm(monkeypatch, "not a question object")
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        self._assert_local_trade_passage(r)
+
+    def test_llm_invalid_json_as_none(self, monkeypatch):
+        set_llm(monkeypatch, None, ["LLM 解析结果失败：Expecting value"])
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        self._assert_local_trade_passage(r)
+
+    def test_llm_wrong_type(self, monkeypatch):
+        set_llm(
+            monkeypatch,
+            {
+                "type": "reading_choice",
+                "article": "polluted",
+                "data": {
+                    "options": [
+                        {"key": "A", "text": "a"},
+                        {"key": "B", "text": "b"},
+                        {"key": "C", "text": "c"},
+                        {"key": "D", "text": "d"},
+                    ],
+                    "correctAnswer": "A",
+                },
+            },
+        )
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        self._assert_local_trade_passage(r)
+        assert any("reading_choice" in w for w in r["validation"]["warnings"])
+
+    def test_llm_missing_type(self, monkeypatch):
+        # Missing type is tolerated under forced typeHint when fields look complete
+        set_llm(
+            monkeypatch,
+            {
+                "data": {
+                    "passageText": (
+                        "Trade in the ancient Middle East played a crucial role in the development of "
+                        "civilizations. Merchants exc[[1]] goods such as tex[[2]], spices, and met[[3]] "
+                        "across vast dis[[4]]."
+                    ),
+                    "blanks": [
+                        {"id": "1", "prefix": "exc", "answer": "hanged", "fullWord": "exchanged"},
+                        {"id": "2", "prefix": "tex", "answer": "tiles", "fullWord": "textiles"},
+                        {"id": "3", "prefix": "met", "answer": "als", "fullWord": "metals"},
+                        {"id": "4", "prefix": "dis", "answer": "tances", "fullWord": "distances"},
+                    ],
+                },
+            },
+        )
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        self._assert_local_trade_passage(r)
+
+    def test_llm_missing_data(self, monkeypatch):
+        set_llm(monkeypatch, {"type": "complete_words", "title": "x"})
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        self._assert_local_trade_passage(r)
+        assert any("本地" in w or "不完整" in w for w in r["validation"]["warnings"])
+
+    def test_llm_blanks_contain_non_dict(self, monkeypatch):
+        set_llm(
+            monkeypatch,
+            {
+                "type": "complete_words",
+                "data": {
+                    "passageText": "exc[[1]] tex[[2]] met[[3]] dis[[4]]",
+                    "blanks": ["hanged", None, 3, {"id": "4", "prefix": "dis", "answer": "tances"}],
+                },
+            },
+        )
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        self._assert_local_trade_passage(r)
+
+    def test_llm_timeout(self, monkeypatch):
+        set_llm(monkeypatch, None, ["LLM 请求超时"])
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        self._assert_local_trade_passage(r)
+        assert any("超时" in w or "LLM 解析失败" in w for w in r["validation"]["warnings"])
+
+    def test_llm_http_error(self, monkeypatch):
+        set_llm(monkeypatch, None, ["LLM 返回 HTTP 502：bad gateway"])
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        self._assert_local_trade_passage(r)
+
+    def test_llm_rewrote_passage_trade_example(self, monkeypatch):
+        set_llm(
+            monkeypatch,
+            {
+                "type": "complete_words",
+                "data": {
+                    "passageText": "REWRITTEN exc[[1]] tex[[2]] met[[3]] dis[[4]]",
+                    "blanks": [
+                        {"id": "1", "prefix": "exc", "answer": "hanged", "fullWord": "exchanged"},
+                        {"id": "2", "prefix": "tex", "answer": "tiles", "fullWord": "textiles"},
+                        {"id": "3", "prefix": "met", "answer": "als", "fullWord": "metals"},
+                        {"id": "4", "prefix": "dis", "answer": "tances", "fullWord": "distances"},
+                    ],
+                },
+            },
+        )
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        assert "REWRITTEN" not in r["draft"]["data"]["passageText"]
+        assert "Middle East" in r["draft"]["data"]["passageText"]
+        self._assert_local_trade_passage(r)
+
+    def test_llm_missing_blank(self, monkeypatch):
+        set_llm(
+            monkeypatch,
+            {
+                "type": "complete_words",
+                "data": {
+                    "passageText": "exc[[1]] tex[[2]] met[[3]]",
+                    "blanks": [
+                        {"id": "1", "prefix": "exc", "answer": "hanged", "fullWord": "exchanged"},
+                        {"id": "2", "prefix": "tex", "answer": "tiles", "fullWord": "textiles"},
+                        {"id": "3", "prefix": "met", "answer": "als", "fullWord": "metals"},
+                    ],
+                },
+            },
+        )
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        self._assert_local_trade_passage(r)
+
+    def test_llm_extra_blank(self, monkeypatch):
+        set_llm(
+            monkeypatch,
+            {
+                "type": "complete_words",
+                "data": {
+                    "passageText": "exc[[1]] tex[[2]] met[[3]] dis[[4]] extra[[5]]",
+                    "blanks": [
+                        {"id": "1", "prefix": "exc", "answer": "hanged", "fullWord": "exchanged"},
+                        {"id": "2", "prefix": "tex", "answer": "tiles", "fullWord": "textiles"},
+                        {"id": "3", "prefix": "met", "answer": "als", "fullWord": "metals"},
+                        {"id": "4", "prefix": "dis", "answer": "tances", "fullWord": "distances"},
+                        {"id": "5", "prefix": "extra", "answer": "xx", "fullWord": "extraxx"},
+                    ],
+                },
+            },
+        )
+        r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        self._assert_local_trade_passage(r)
+
+    def test_parse_import_never_raises_on_merge_bug(self, monkeypatch):
+        """Even if merge blows up, parse_import returns a draft."""
+
+        def boom(*_a, **_k):
+            raise RuntimeError("simulated merge crash")
+
+        set_llm(
+            monkeypatch,
+            {
+                "type": "complete_words",
+                "data": {
+                    "passageText": "exc[[1]]",
+                    "blanks": [{"id": "1", "prefix": "exc", "answer": "hanged", "fullWord": "exchanged"}],
+                },
+            },
+        )
+        original = import_pipeline.ADAPTERS["complete_words"]["merge"]
+        import_pipeline.ADAPTERS["complete_words"]["merge"] = boom
+        try:
+            r = import_pipeline.parse_import(COMPLETE_WORDS_RAW, "complete_words")
+        finally:
+            import_pipeline.ADAPTERS["complete_words"]["merge"] = original
+        assert r["draft"]["type"] == "complete_words"
+        assert r["rawText"] == COMPLETE_WORDS_RAW

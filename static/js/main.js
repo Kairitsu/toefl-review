@@ -172,11 +172,26 @@ function closestAction(target, attr = 'data-action') {
   return target && target.closest ? target.closest(`[${attr}]`) : null;
 }
 
+/**
+ * Native <select> opens its option list on click/mousedown. If we run a
+ * data-action on click that re-renders the page (e.g. setImportTypeHint →
+ * renderImport), the select node is destroyed and the menu vanishes immediately.
+ * Same for checkboxes: their state is driven by change, not click.
+ * Clicks on selects must be ignored; only the change event may dispatch.
+ */
+function shouldIgnoreClickAction(el) {
+  return Boolean(
+    el &&
+      (el.matches('select[data-action]') ||
+        el.matches('input[type="checkbox"][data-action]') ||
+        el.matches('input[type="radio"][data-action]')),
+  );
+}
+
 document.addEventListener('click', (event) => {
   const el = closestAction(event.target, 'data-action');
   if (!el) return;
-  // Let change handler own checkbox toggles
-  if (el.matches('input[type="checkbox"][data-action]')) return;
+  if (shouldIgnoreClickAction(el)) return;
   dispatchAction(el, event);
 });
 

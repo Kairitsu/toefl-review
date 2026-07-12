@@ -19,6 +19,11 @@ from parsing import (
 )
 from security import decrypt_secret, redact
 
+# Must stay well below gunicorn worker timeout (default 30s; Dockerfile uses 90s).
+# If the LLM hangs, urllib must raise first so parse_import can fall back to local
+# parsing instead of gunicorn aborting the worker with SystemExit → HTTP 500.
+LLM_REQUEST_TIMEOUT_SECONDS = 20
+
 
 def load_llm_settings():
     with get_db() as db:
@@ -341,21 +346,37 @@ def call_llm(raw_text, type_hint=""):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request_obj, timeout=60) as response:
+        with urllib.request.urlopen(request_obj, timeout=LLM_REQUEST_TIMEOUT_SECONDS) as response:
             response_body = response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         response_body = exc.read().decode("utf-8", errors="replace")
         safe_body = redact(response_body, [settings["api_key"]])
         return None, [f"LLM 返回 HTTP {exc.code}：{safe_body or '无响应正文'}"]
     except urllib.error.URLError as exc:
-        return None, [f"LLM 请求失败：{redact(exc.reason, [settings['api_key']])}"]
+        reason = getattr(exc, "reason", exc)
+        # socket.timeout is a subclass of OSError/TimeoutError on modern Python;
+        # also treat nested timeout reasons as request timeout.
+        if isinstance(reason, TimeoutError) or isinstance(exc, TimeoutError):
+            return None, ["LLM 请求超时"]
+        return None, [f"LLM 请求失败：{redact(reason, [settings['api_key']])}"]
     except TimeoutError:
         return None, ["LLM 请求超时"]
+    except OSError as exc:
+        # Covers residual socket/ssl timeouts not wrapped as URLError.
+        if isinstance(exc, TimeoutError) or "timed out" in str(exc).lower():
+            return None, ["LLM 请求超时"]
+        return None, [f"LLM 请求失败：{redact(exc, [settings['api_key']])}"]
+    except Exception as exc:
+        # Never let unexpected network errors escape — local fallback must run.
+        return None, [f"LLM 请求失败：{redact(exc, [settings['api_key']])}"]
 
     try:
         payload = json.loads(response_body)
         content = payload["choices"][0]["message"]["content"]
         parsed = extract_json_object(content)
+        # extract_json_object raises on unusable top-level shapes; None is also a failure.
+        if parsed is None:
+            return None, ["LLM 返回了无法解析的内容（null 或空）"]
         return parsed, []
     except Exception as exc:
         return None, [f"LLM 解析结果失败：{redact(exc, [settings['api_key']])}"]

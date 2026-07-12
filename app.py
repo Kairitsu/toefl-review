@@ -164,13 +164,50 @@ def create_app():
 
     @application.errorhandler(413)
     def too_large(_):
-        return jsonify({"error": "请求体过大"}), 413
+        return jsonify({"error": "请求体过大", "details": ["请求体过大"]}), 413
+
+    @application.errorhandler(404)
+    def not_found(_):
+        return jsonify({"error": "未找到", "details": ["请求的资源不存在"]}), 404
+
+    @application.errorhandler(405)
+    def method_not_allowed(_):
+        return jsonify({"error": "方法不允许", "details": ["HTTP 方法不被允许"]}), 405
+
+    @application.errorhandler(500)
+    def internal_error(_):
+        return jsonify(
+            {
+                "error": "服务器内部错误",
+                "details": ["服务器解析失败，请查看服务日志"],
+            }
+        ), 500
 
     @application.errorhandler(Exception)
     def handle_error(exc):
-        status = getattr(exc, "code", 500)
-        message = "服务器内部错误" if status == 500 else str(exc)
-        return jsonify({"error": redact(message)}), status
+        # Always JSON — never Flask's default HTML error page.
+        import logging
+        import traceback
+
+        status = getattr(exc, "code", None)
+        if status is None:
+            status = 500
+        try:
+            status = int(status)
+        except (TypeError, ValueError):
+            status = 500
+        if status < 400 or status > 599:
+            status = 500
+        if status >= 500:
+            logging.getLogger(__name__).error(
+                "unhandled exception:\n%s", traceback.format_exc()
+            )
+            message = "服务器内部错误"
+            details = ["服务器解析失败，请查看服务日志"]
+        else:
+            message = redact(str(exc) or "请求失败")
+            details = [message]
+        return jsonify({"error": message, "details": details}), status
 
     @application.get("/")
     def index():

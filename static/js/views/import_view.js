@@ -199,8 +199,8 @@ function parseBuildSentenceRawFields(rawValue) {
   return fields;
 }
 
-function buildSentenceRawTableHtml(rawValue, parseDisabled) {
-  const fields = parseBuildSentenceRawFields(rawValue);
+function buildSentenceRawTableHtmlFromFields(fields, parseDisabled) {
+  const data = fields || emptyBuildSentenceRawFields();
   return `
     <div class="structured-raw-wrap">
       <table class="structured-raw-table">
@@ -215,7 +215,7 @@ function buildSentenceRawTableHtml(rawValue, parseDisabled) {
                     class="structured-raw-input"
                     ${parseDisabled}
                     placeholder="${attr(field.placeholder)}"
-                  >${escapeHtml(fields[field.key])}</textarea>
+                  >${escapeHtml(data[field.key] || "")}</textarea>
                 </td>
               </tr>
             `,
@@ -224,6 +224,10 @@ function buildSentenceRawTableHtml(rawValue, parseDisabled) {
       </table>
     </div>
   `;
+}
+
+function buildSentenceRawTableHtml(rawValue, parseDisabled) {
+  return buildSentenceRawTableHtmlFromFields(parseBuildSentenceRawFields(rawValue), parseDisabled);
 }
 
 function escapeRegExp(value) {
@@ -362,7 +366,13 @@ function rawImportInputHtml(rawValue, parseDisabled) {
     return readingChoiceRawTableHtml(fields, parseDisabled);
   }
   if (state.importTypeHint === "build_sentence") {
-    return buildSentenceRawTableHtml(rawValue, parseDisabled);
+    // Prefer in-memory fields so switching away and back keeps the user's paste.
+    const fields =
+      state.buildSentenceRawFields && Object.values(state.buildSentenceRawFields).some((v) => String(v || "").trim())
+        ? state.buildSentenceRawFields
+        : parseBuildSentenceRawFields(rawValue);
+    state.buildSentenceRawFields = fields;
+    return buildSentenceRawTableHtmlFromFields(fields, parseDisabled);
   }
   if (state.importTypeHint === "complete_words") {
     return completeWordsRawInputHtml(state.completeWordsRawFields, parseDisabled);
@@ -510,10 +520,28 @@ function renderImport() {
 
 function setImportTypeHint(value) {
   const previousType = normalizeImportType(state.importTypeHint);
-  state.importRaw = collectImportRaw(state.importTypeHint);
-  state.importTypeHint = normalizeImportType(value);
-  if (state.importTypeHint === "reading_choice" && previousType !== "reading_choice") {
-    state.readingChoiceRawFields = parseReadingChoiceRawFields(state.importRaw);
+  const nextType = normalizeImportType(value);
+  // change-only path: ignore no-ops so opening the native select never rebuilds DOM
+  if (!nextType || nextType === previousType) return;
+
+  // Persist the type the user is leaving so switching back restores their paste.
+  if (previousType === "reading_choice") {
+    state.readingChoiceRawFields = collectReadingChoiceRawFields();
+  } else if (previousType === "complete_words") {
+    state.completeWordsRawFields = collectCompleteWordsSourceFields();
+  } else if (previousType === "build_sentence") {
+    state.buildSentenceRawFields = collectBuildSentenceRawFields();
+  }
+  state.importRawByType = state.importRawByType || {};
+  state.importRawByType[previousType] = collectImportRaw(previousType);
+
+  state.importTypeHint = nextType;
+  // Prefer type-scoped raw snapshot; never clobber structured fields with another type's text.
+  if (state.importRawByType[nextType]) {
+    state.importRaw = state.importRawByType[nextType];
+  }
+  if (nextType === "build_sentence" && !state.buildSentenceRawFields) {
+    state.buildSentenceRawFields = parseBuildSentenceRawFields(state.importRawByType.build_sentence || "");
   }
   if (!state.importDraft) state.importValidation = null;
   renderImport();
@@ -527,9 +555,22 @@ async function parseImport() {
     state.importRaw = serializeReadingChoiceRaw(state.readingChoiceRawFields);
   }
   if (state.importTypeHint === "complete_words") {
+    // Snapshot fields before loading re-render so error paths never lose the paste.
     state.completeWordsRawFields = collectCompleteWordsSourceFields();
     state.importRaw = serializeCompleteWordsSourceRaw(state.completeWordsRawFields);
   }
+  // Preserve left-side input across the loading re-render and any error path.
+  const preservedRaw = state.importRaw;
+  const preservedCompleteFields = state.completeWordsRawFields
+    ? { ...state.completeWordsRawFields }
+    : null;
+  const preservedReadingFields = state.readingChoiceRawFields
+    ? { ...state.readingChoiceRawFields }
+    : null;
+  const preservedBuildFields = state.buildSentenceRawFields
+    ? { ...state.buildSentenceRawFields }
+    : null;
+
   state.importError = null;
   state.importDraft = null;
   state.importValidation = null;
@@ -538,17 +579,26 @@ async function parseImport() {
   try {
     const data = await api("/api/import/parse", {
       method: "POST",
-      body: JSON.stringify({ rawText: state.importRaw, typeHint: state.importTypeHint }),
+      body: JSON.stringify({ rawText: preservedRaw, typeHint: state.importTypeHint }),
     });
     // Preserve the user's left-side raw input; only adopt server-echoed text if present
-    state.importRaw = data.rawText || state.importRaw;
+    state.importRaw = data.rawText || preservedRaw;
     state.importDraft = data.draft;
     state.importValidation = data.validation;
     toast("解析完成，请预览确认");
   } catch (error) {
-    state.importError = { message: error.message, details: error.data?.details || [] };
-    if (error.data?.rawText) state.importRaw = error.data.rawText;
-    // Keep any previously parsed draft so the preview is not wiped on failure
+    const details = Array.isArray(error.data?.details) ? error.data.details : [];
+    // Never surface raw HTML / huge server bodies — api.js already sanitizes.
+    const message =
+      (error.data && error.data.error) ||
+      error.message ||
+      "服务器解析失败，请查看服务日志";
+    state.importError = { message: String(message).slice(0, 200), details: details.map(String).slice(0, 10) };
+    // Restore all left-side inputs exactly as the user left them
+    state.importRaw = (error.data && error.data.rawText) || preservedRaw;
+    if (preservedCompleteFields) state.completeWordsRawFields = preservedCompleteFields;
+    if (preservedReadingFields) state.readingChoiceRawFields = preservedReadingFields;
+    if (preservedBuildFields) state.buildSentenceRawFields = preservedBuildFields;
   } finally {
     state.importLoading = false;
   }
@@ -562,8 +612,10 @@ function clearImport() {
   state.importError = null;
   state.importLoading = false;
   state.readingChoiceRawFields = { title: "", article: "", question: "", options: "", correctAnswer: "", analysis: "" };
+  state.buildSentenceRawFields = emptyBuildSentenceRawFields();
   state.completeWordsRawFields = { passage: "", answers: "", analysis: "" };
   state.completeWordsFields = { passage: "", answers: "", analysis: "" };
+  state.importRawByType = { reading_choice: "", build_sentence: "", complete_words: "" };
   renderImport();
 }
 
@@ -789,8 +841,14 @@ function completeFormHtml(q, scope) {
 }
 
 function changeFormType(scope) {
+  const nextType = $(`${scope}-type`)?.value;
+  const currentDraft =
+    scope === "import" ? state.importDraft : scope === "edit" ? state.editQuestion : null;
+  // Avoid full re-render when the select value did not actually change
+  if (currentDraft && currentDraft.type === nextType) return;
+
   const current = collectQuestionForm(scope, true);
-  current.type = $(`${scope}-type`).value;
+  current.type = nextType;
   current.data = defaultData(current.type);
   if (scope === "import") state.importDraft = current;
   if (scope === "edit") state.editQuestion = { ...state.editQuestion, ...current };
@@ -952,10 +1010,9 @@ export {
   emptyBuildSentenceRawFields,
   parseBuildSentenceRawFields,
   buildSentenceRawTableHtml,
-  parseCompleteWordsRawFields,
   escapeRegExp,
   completeWordsRawInputHtml,
-  completeWordsStructuredFieldsHtml,
+  buildSentenceRawTableHtmlFromFields,
   parseCompleteAnswersClient,
   hasCompleteWordBlank,
   buildCompleteWordsFromFields,

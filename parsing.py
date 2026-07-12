@@ -732,6 +732,13 @@ def _complete_words_llm_aligns_with_local(llm_data, local_data):
     """
     llm_blanks = llm_data.get("blanks", []) if isinstance(llm_data, dict) else []
     local_blanks = local_data.get("blanks", []) if isinstance(local_data, dict) else []
+    if not isinstance(llm_blanks, list) or not isinstance(local_blanks, list):
+        return False
+    # Reject non-dict blank items — never call .get() on strings/nulls.
+    if any(not isinstance(b, dict) for b in llm_blanks):
+        return False
+    if any(not isinstance(b, dict) for b in local_blanks):
+        return False
     if not llm_blanks or not local_blanks or len(llm_blanks) != len(local_blanks):
         return False
     for local_b, llm_b in zip(local_blanks, llm_blanks):
@@ -766,21 +773,22 @@ def merge_complete_words_draft(primary, fallback):
       rewritten / fullWord inconsistency / request failure), local answers stand.
     - explanation: LLM priority, local fills missing.
     """
-    if not fallback:
-        return primary
-    if not primary:
+    if not isinstance(fallback, dict):
+        return primary if isinstance(primary, dict) else None
+    if not isinstance(primary, dict):
         return fallback
 
     primary_data = primary.get("data") if isinstance(primary.get("data"), dict) else {}
     fallback_data = fallback.get("data") if isinstance(fallback.get("data"), dict) else {}
     local_passage = as_clean_string(fallback_data.get("passageText"))
-    local_blanks = fallback_data.get("blanks", []) or []
+    raw_local_blanks = fallback_data.get("blanks", []) or []
+    local_blanks = [b for b in raw_local_blanks if isinstance(b, dict)]
 
     # Start from local blank structure (prefix + blankLength from underscore scan)
     merged_blanks = [dict(b) for b in local_blanks]
 
     if _complete_words_llm_aligns_with_local(primary_data, fallback_data):
-        llm_blanks = primary_data.get("blanks", []) or []
+        llm_blanks = [b for b in (primary_data.get("blanks") or []) if isinstance(b, dict)]
         for index, (local_b, llm_b) in enumerate(zip(merged_blanks, llm_blanks)):
             llm_answer = as_clean_string(llm_b.get("answer"))
             llm_full = as_clean_string(llm_b.get("fullWord"))

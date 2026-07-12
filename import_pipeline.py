@@ -16,10 +16,14 @@ All three types share the same execution stages:
 The LLM call (llm.call_llm) is shared. Each type owns its own schema aliases,
 normalization, local fallback, merge, and validation via a per-type adapter
 dict registered in ADAPTERS. There is no global parser that mixes fields from
-different types: once the user picks a typeHint, only that type's adapter runs,
-and the LLM's declared type is ignored for field extraction.
+different types: once the user picks a typeHint, only that type's adapter runs.
+If the LLM returns a different type than the forced typeHint, the LLM payload
+is discarded as invalid (no cross-type field remapping) and local fallback
+supplies the draft.
 """
 from __future__ import annotations
+
+import logging
 
 from grading import validate_question
 from llm import call_llm
@@ -260,6 +264,8 @@ ADAPTERS = {
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+logger = logging.getLogger(__name__)
+
 
 def parse_import(raw_text, type_hint=""):
     """
@@ -271,48 +277,131 @@ def parse_import(raw_text, type_hint=""):
     """
     raw_text = as_clean_string(raw_text)
     forced_type = _resolve_type(raw_text, type_hint)
+    try:
+        return _parse_import_inner(raw_text, forced_type)
+    except Exception:
+        # Last-resort safety net: unexpected bugs must not produce HTTP 500 HTML.
+        logger.exception("parse_import unexpected failure (type=%s)", forced_type)
+        try:
+            draft = ADAPTERS[forced_type]["local_fallback"](raw_text)
+            if not isinstance(draft, dict):
+                draft = _empty_draft(forced_type)
+            draft = normalize_question(draft) if isinstance(draft, dict) else _empty_draft(forced_type)
+            draft["type"] = forced_type
+            validation = validate_question(draft)
+        except Exception:
+            logger.exception("parse_import local recovery also failed")
+            draft = _empty_draft(forced_type)
+            draft["type"] = forced_type
+            validation = {
+                "ok": False,
+                "errors": ["解析过程中发生意外错误，请检查输入后重试"],
+                "warnings": [],
+            }
+        warnings = ["解析过程中发生意外错误，已尽量使用本地结果"]
+        validation["warnings"] = warnings + list(validation.get("warnings") or [])
+        return {"rawText": raw_text, "draft": draft, "validation": validation}
+
+
+def _parse_import_inner(raw_text, forced_type):
     adapter = ADAPTERS[forced_type]
 
-    # Stage 1: LLM call (shared)
-    llm_parsed, llm_errors = call_llm(raw_text, forced_type)
+    # Stage 1: LLM call (shared). call_llm must never raise; still guard.
+    try:
+        llm_parsed, llm_errors = call_llm(raw_text, forced_type)
+    except Exception as exc:
+        logger.exception("call_llm raised unexpectedly")
+        llm_parsed, llm_errors = None, [f"LLM 请求失败：{exc}"]
+
     warnings = []
     llm_result = None
 
     if llm_parsed is not None:
-        # Stages 2-3: normalize + validate LLM result (per-type)
-        llm_result = adapter["normalize_llm"](llm_parsed, raw_text)
-        returned_type = as_clean_string(llm_parsed.get("type")) if isinstance(llm_parsed, dict) else ""
-        if returned_type and returned_type != forced_type:
+        # Non-dict top-level (array / string / null-ish) → treat as invalid LLM payload.
+        if not isinstance(llm_parsed, dict):
             warnings.append(
-                f"LLM 返回题型 {returned_type}，已按你选择的 {forced_type} 处理"
+                f"LLM 返回了非对象结构（{type(llm_parsed).__name__}），已回退到本地解析"
             )
-        llm_ok, llm_validate_errors = adapter["validate_llm"](llm_result)
-        if not llm_ok:
-            warnings.append("LLM 返回结果不完整，已用本地解析补充：" + "；".join(llm_validate_errors))
+        else:
+            returned_type = as_clean_string(llm_parsed.get("type"))
+            # Wrong type = invalid LLM result. Do not remap fields across types.
+            if returned_type and returned_type not in ALLOWED_TYPES:
+                warnings.append(
+                    f"LLM 返回未知题型 {returned_type}，已视为无效并回退到本地解析"
+                )
+            elif returned_type and returned_type != forced_type:
+                warnings.append(
+                    f"LLM 返回题型 {returned_type}，与选择的 {forced_type} 不一致，"
+                    f"已视为无效并回退到本地解析（不跨题型转换字段）"
+                )
+            else:
+                # Stages 2-3: normalize + validate LLM result (per-type)
+                # Missing type is tolerated when typeHint is forced: extract under forced type.
+                try:
+                    llm_result = adapter["normalize_llm"](llm_parsed, raw_text)
+                    llm_ok, llm_validate_errors = adapter["validate_llm"](llm_result)
+                    if not llm_ok:
+                        warnings.append(
+                            "LLM 返回结果不完整，已用本地解析补充："
+                            + "；".join(llm_validate_errors)
+                        )
+                except Exception:
+                    logger.exception("LLM normalize/validate failed; discarding LLM result")
+                    llm_result = None
+                    warnings.append("LLM 返回结果无法规范化，已回退到本地解析")
     else:
-        warnings.append("LLM 解析失败，已回退到本地结构化识别：" + "；".join(llm_errors))
+        # Expected LLM failures (timeout / HTTP / bad JSON) — not app crashes.
+        msg = "；".join(llm_errors) if llm_errors else "未知原因"
+        warnings.append("LLM 解析失败，已回退到本地结构化识别：" + msg)
+        logger.info("LLM parse fallback: %s", msg)
 
     # Stage 4: local fallback (always runs — it is the deterministic safety net)
-    local_result = adapter["local_fallback"](raw_text)
+    try:
+        local_result = adapter["local_fallback"](raw_text)
+    except Exception:
+        logger.exception("local_fallback failed for type=%s", forced_type)
+        local_result = _empty_draft(forced_type)
+        warnings.append("本地解析也失败，请检查原始输入格式")
 
     # Stage 5: merge — LLM fields win when valid/complete; local fills missing
-    if llm_result is not None:
-        draft = adapter["merge"](llm_result, local_result)
-    elif local_result is not None:
-        draft = local_result
-    else:
-        draft = _empty_draft(forced_type)
+    try:
+        if llm_result is not None and isinstance(llm_result, dict):
+            draft = adapter["merge"](llm_result, local_result)
+        elif isinstance(local_result, dict):
+            draft = local_result
+        else:
+            draft = _empty_draft(forced_type)
+    except Exception:
+        logger.exception("merge failed for type=%s", forced_type)
+        draft = local_result if isinstance(local_result, dict) else _empty_draft(forced_type)
+        warnings.append("合并 LLM 与本地结果失败，已使用本地解析结果")
 
     # Stage 6: final normalize + lock type
-    draft = normalize_question(draft) if isinstance(draft, dict) else _empty_draft(forced_type)
+    try:
+        draft = normalize_question(draft) if isinstance(draft, dict) else _empty_draft(forced_type)
+    except Exception:
+        logger.exception("final normalize failed")
+        draft = _empty_draft(forced_type)
     draft["type"] = forced_type
 
     # Stage 7: final validate
-    validation = validate_question(draft)
+    try:
+        validation = validate_question(draft)
+    except Exception:
+        logger.exception("validate_question failed")
+        validation = {
+            "ok": False,
+            "errors": ["题目校验失败"],
+            "warnings": [],
+        }
+    if not isinstance(validation, dict):
+        validation = {"ok": False, "errors": ["题目校验返回异常"], "warnings": []}
+    validation.setdefault("errors", [])
+    validation.setdefault("warnings", [])
     if warnings:
-        validation["warnings"] = warnings + validation.get("warnings", [])
+        validation["warnings"] = warnings + list(validation.get("warnings") or [])
     if draft.get("needsConfirmation") and validation.get("ok"):
-        validation["warnings"] = validation.get("warnings", []) + [
+        validation["warnings"] = list(validation.get("warnings") or []) + [
             "题目部分字段可能不完整，请核对后再保存。"
         ]
 

@@ -83,6 +83,19 @@ const state = {
   importLoading: false,
   importTypeHint: "reading_choice",
   readingChoiceRawFields: { title: "", article: "", question: "", options: "", correctAnswer: "", analysis: "" },
+  buildSentenceRawFields: {
+    questioner: "",
+    sentenceTemplate: "",
+    wordBank: "",
+    correctAnswer: "",
+    analysis: "",
+  },
+  /** Per-type paste snapshots so switching typeHint does not wipe other types' input. */
+  importRawByType: {
+    reading_choice: "",
+    build_sentence: "",
+    complete_words: "",
+  },
   completeWordsRawFields: { passage: "", answers: "", analysis: "" },
   completeWordsFields: { passage: "", answers: "", analysis: "" },
   library: [],
