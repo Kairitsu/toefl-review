@@ -17,11 +17,10 @@ const IMPORT_TYPES = ["reading_choice", "build_sentence", "complete_words"];
 const READING_CHOICE_RAW_FIELDS = [
   { key: "title", label: "标题", placeholder: "可选，便于 LLM 识别题目主题" },
   { key: "article", label: "文章", placeholder: "阅读文章原文" },
-  { key: "question", label: "问题", placeholder: "题干或问题" },
   {
-    key: "options",
-    label: "选项",
-    placeholder: "可直接粘贴：\nA. ...\nB. ...\nC. ...\nD. ...",
+    key: "questionAndOptions",
+    label: "问题与选项",
+    placeholder: "一次粘贴问题和四个选项：\nWhat is the main purpose...?\n\nA. ...\nB. ...\nC. ...\nD. ...",
   },
   { key: "correctAnswer", label: "正确答案", placeholder: "A / B / C / D，或粘贴完整选项文本" },
   { key: "analysis", label: "解析", placeholder: "题目解析（可选）" },
@@ -31,10 +30,10 @@ const BUILD_SENTENCE_RAW_FIELDS = [
   { key: "questioner", label: "提问者", placeholder: "例如：What impressed you about the team's presentation yesterday?" },
   {
     key: "sentenceTemplate",
-    label: "句子模板",
-    placeholder: "空位用下划线或 {{blank}}；固定词原样保留",
+    label: "题目详情",
+    placeholder: "空位用下划线或 {{blank}}；题目中固定的词和标点原样保留",
   },
-  { key: "wordBank", label: "词库", placeholder: "词或词组之间用逗号隔开，例如：presentation, entire, their, public speaking" },
+  { key: "wordBank", label: "待选词", placeholder: "词或词组之间用逗号隔开，例如：presentation, entire, their, public speaking" },
   {
     key: "correctAnswer",
     label: "正确答案",
@@ -82,7 +81,7 @@ const state = {
   importError: null,
   importLoading: false,
   importTypeHint: "reading_choice",
-  readingChoiceRawFields: { title: "", article: "", question: "", options: "", correctAnswer: "", analysis: "" },
+  readingChoiceRawFields: { title: "", article: "", questionAndOptions: "", correctAnswer: "", analysis: "" },
   buildSentenceRawFields: {
     questioner: "",
     sentenceTemplate: "",

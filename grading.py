@@ -49,20 +49,20 @@ def validate_question(question):
         correct_order = data.get("correctOrder", [])
         complete_sentence = as_clean_string(data.get("completeSentence", ""))
         if not template:
-            errors.append("写作造句题必须填写句子模板（可用 ____ 或 {{blank}} 标记空位，固定词原样保留）")
+            errors.append("写作造句题必须填写题目详情（可用 ____ 或 {{blank}} 标记空位，固定词原样保留）")
         if not word_bank:
-            errors.append("写作造句题必须填写词库")
+            errors.append("写作造句题必须填写待选词")
         if not correct_order:
             errors.append("写作造句题必须填写正确填入顺序（每个空位对应一个词块）")
         blank_count = count_template_blanks(template)
         if template and blank_count == 0:
-            errors.append("句子模板至少需要一个空格标记，例如 {{blank}} 或 ____")
+            errors.append("题目详情至少需要一个空格标记，例如 {{blank}} 或 ____")
         if blank_count and correct_order and blank_count != len(correct_order):
             errors.append(
-                f"句子模板空格数是 {blank_count}，但正确顺序有 {len(correct_order)} 项；二者必须一致"
+                f"题目详情空格数是 {blank_count}，但正确顺序有 {len(correct_order)} 项；二者必须一致"
             )
         if word_bank and correct_order and len(word_bank) < len(correct_order):
-            errors.append("词库词块数量不能少于正确顺序数量")
+            errors.append("待选词的词块数量不能少于正确顺序数量")
         bank_counts = {}
         for item in word_bank:
             key = item.casefold()
@@ -72,7 +72,7 @@ def validate_question(question):
             key = item.casefold()
             used_counts[key] = used_counts.get(key, 0) + 1
             if used_counts[key] > bank_counts.get(key, 0):
-                errors.append(f"正确顺序中的“{item}”不在词库中，或使用次数超过词库数量")
+                errors.append(f"正确顺序中的“{item}”不在待选词中，或使用次数超过待选词数量")
         # Fixed text should not appear as word-bank-only answers
         segments = parse_template_segments(template)
         fixed_chunks = [
@@ -84,12 +84,12 @@ def validate_question(question):
         for chunk in fixed_chunks:
             if any(tokens_equal(chunk, bank) for bank in word_bank):
                 warnings.append(
-                    f"固定文本 “{chunk}” 同时出现在词库中；请确认它是否真的是可填词块，而不是题目给定文本"
+                    f"固定文本 “{chunk}” 同时出现在待选词中；请确认它是否真的是可填词块，而不是题目给定文本"
                 )
         if not complete_sentence and correct_order and not errors:
             warnings.append("未填写完整正确句子；系统将根据模板与正确顺序自动生成预览")
         if question.get("needsConfirmation") and not errors:
-            warnings.append("题目标记为需要人工确认，请核对句子模板、固定文本与正确顺序后再保存")
+            warnings.append("题目标记为需要人工确认，请核对题目详情、固定文本与正确顺序后再保存")
 
     if qtype == "complete_words":
         passage = data.get("passageText", "")

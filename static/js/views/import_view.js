@@ -99,6 +99,7 @@ function emptyReadingChoiceRawFields() {
 
 function parseReadingChoiceRawFields(rawValue) {
   const fields = emptyReadingChoiceRawFields();
+  const legacy = { question: "", options: "" };
   const rawText = String(rawValue || "");
   if (!rawText.trim()) return fields;
 
@@ -135,8 +136,13 @@ function parseReadingChoiceRawFields(rawValue) {
     if (!key) return;
     const start = match.index + match[0].length;
     const end = index + 1 < matches.length ? matches[index + 1].index : rawText.length;
-    fields[key] = rawText.slice(start, end).trim();
+    const value = rawText.slice(start, end).trim();
+    if (key === "question" || key === "options") legacy[key] = value;
+    else fields[key] = value;
   });
+  if (!fields.questionAndOptions) {
+    fields.questionAndOptions = [legacy.question, legacy.options].filter(Boolean).join("\n\n");
+  }
   return fields;
 }
 
@@ -178,11 +184,13 @@ function parseBuildSentenceRawFields(rawValue) {
 
   const labels = Object.fromEntries(BUILD_SENTENCE_RAW_FIELDS.map((field) => [field.label, field.key]));
   // Also accept common aliases used in paste text
+  labels["题目详情"] = "sentenceTemplate";
   labels["模板"] = "sentenceTemplate";
   labels["问题"] = "questioner";
+  labels["待选词"] = "wordBank";
   labels["正确顺序"] = "correctAnswer";
   labels["完整句子"] = "correctAnswer";
-  const pattern = /(?:^|\n)\s*(提问者|问题|句子模板|模板|词库|正确答案|正确顺序|完整句子|解析)\s*[：:]\s*/g;
+  const pattern = /(?:^|\n)\s*(提问者|问题|题目详情|句子模板|模板|待选词|词库|正确答案|正确顺序|完整句子|解析)\s*[：:]\s*/g;
   const matches = [...rawText.matchAll(pattern)];
   if (!matches.length) {
     fields.questioner = rawText.trim();
@@ -455,6 +463,10 @@ function renderImport() {
   const rawValue = state.importRaw || "";
   const parseDisabled = state.importLoading ? "disabled" : "";
   const hasDraft = Boolean(state.importDraft);
+  const compactBuildPreview = hasDraft && draft.type === "build_sentence";
+  const compactReadingPreview = hasDraft && draft.type === "reading_choice";
+  const compactImportPreview = compactBuildPreview || compactReadingPreview;
+  const readingSaveBlocked = compactReadingPreview && state.importValidation && !state.importValidation.ok;
   const rawLabelFor =
     state.importTypeHint === "reading_choice"
       ? "reading-raw-title"
@@ -506,11 +518,19 @@ function renderImport() {
           <div class="panel-title">
             <h2>解析预览</h2>
           </div>
-          ${hasDraft ? confirmationBanner(draft) : `<div class="status soft-info">解析后会按题型展示结构化字段，可在此直接修改。</div>`}
-          ${validationHtml(state.importValidation)}
+          ${
+            compactImportPreview
+              ? ""
+              : hasDraft
+              ? confirmationBanner(draft)
+              : state.importTypeHint === "build_sentence" || state.importTypeHint === "reading_choice"
+                ? `<div class="status soft-info">解析后将在此显示紧凑预览；如需修改，请编辑左侧原始题目后重新解析。</div>`
+                : `<div class="status soft-info">解析后会按题型展示结构化字段，可在此直接修改。</div>`
+          }
+          ${compactImportPreview && state.importValidation?.ok ? "" : validationHtml(state.importValidation)}
           ${questionFormHtml(draft, "import")}
           <div class="toolbar actions">
-            <button class="btn primary" type="button" data-action="saveQuestion" data-arg="import" ${hasDraft ? "" : "disabled"}>保存进题库</button>
+            <button class="btn primary" type="button" data-action="saveQuestion" data-arg="import" ${hasDraft && !readingSaveBlocked ? "" : "disabled"}>保存进题库</button>
           </div>
         </section>
       </div>
@@ -611,7 +631,7 @@ function clearImport() {
   state.importValidation = null;
   state.importError = null;
   state.importLoading = false;
-  state.readingChoiceRawFields = { title: "", article: "", question: "", options: "", correctAnswer: "", analysis: "" };
+  state.readingChoiceRawFields = { title: "", article: "", questionAndOptions: "", correctAnswer: "", analysis: "" };
   state.buildSentenceRawFields = emptyBuildSentenceRawFields();
   state.completeWordsRawFields = { passage: "", answers: "", analysis: "" };
   state.completeWordsFields = { passage: "", answers: "", analysis: "" };
@@ -628,10 +648,10 @@ function buildImportSummaryHtml(q) {
   return `
     <div class="build-summary">
       <div class="build-summary-row"><span class="k">提问者</span><span class="v">${escapeHtml(q.prompt || "—")}</span></div>
-      <div class="build-summary-row"><span class="k">句子模板</span><span class="v">${templatePreviewHtml(data.sentenceTemplate || "")}</span></div>
-      <div class="build-summary-row"><span class="k">空位数</span><span class="v">${blanks} 个 · 正确顺序 ${order.length} 项 · 词库 ${bank.length} 个</span></div>
+      <div class="build-summary-row"><span class="k">题目详情</span><span class="v">${templatePreviewHtml(data.sentenceTemplate || "", false)}</span></div>
+      <div class="build-summary-row"><span class="k">空位数</span><span class="v">${blanks} 个</span></div>
       <div class="build-summary-row">
-        <span class="k">词库</span>
+        <span class="k">待选词</span>
         <span class="v"><div class="build-summary-chips">${bank.map((w) => `<span>${escapeHtml(w)}</span>`).join("") || "—"}</div></span>
       </div>
       <div class="build-summary-row">
@@ -643,8 +663,59 @@ function buildImportSummaryHtml(q) {
   `;
 }
 
+function readingImportPreviewHtml(q) {
+  if (!q || q.type !== "reading_choice") return "";
+  const data = q.data || {};
+  const options = Array.isArray(data.options) ? data.options : [];
+  return `
+    <div class="reading-import-preview">
+      <div class="reading-preview-section reading-preview-title">
+        <div class="reading-preview-label">标题</div>
+        <h3>${escapeHtml(q.title || "—")}</h3>
+      </div>
+      <div class="reading-preview-section">
+        <div class="reading-preview-label">阅读文章</div>
+        <div class="reading-preview-article">${escapeHtml(q.article || "—")}</div>
+      </div>
+      <div class="reading-preview-question-block">
+        <div class="reading-preview-label">问题</div>
+        <div class="reading-preview-question">${escapeHtml(q.prompt || "—")}</div>
+        <div class="reading-preview-options">
+          ${["A", "B", "C", "D"].map((key) => {
+            const option = options.find((item) => String(item?.key || "").toUpperCase() === key);
+            return `
+              <div class="reading-preview-option">
+                <span class="option-key">${key}</span>
+                <span class="option-text">${escapeHtml(option?.text || "—")}</span>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+      <div class="reading-preview-answer">
+        <span class="reading-preview-label">正确答案</span>
+        <strong>${escapeHtml(data.correctAnswer || "—")}</strong>
+      </div>
+      ${q.explanation ? `
+        <div class="reading-preview-explanation">
+          <div class="reading-preview-label">解析</div>
+          <div>${escapeHtml(q.explanation)}</div>
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
 function questionFormHtml(question, scope) {
   const q = normalizeFormQuestion(question);
+  if (scope === "import" && q.type === "reading_choice") {
+    return state.importDraft ? readingImportPreviewHtml(q) : "";
+  }
+  // The import preview is intentionally read-only for build_sentence. Editing
+  // happens in the structured source table on the left, followed by re-parse.
+  if (scope === "import" && q.type === "build_sentence") {
+    return state.importDraft ? buildImportSummaryHtml(q) : "";
+  }
   return `
     <div class="field">
       <label>题型</label>
@@ -718,10 +789,10 @@ function normalizeTemplateClient(template) {
     .trim();
 }
 
-function templatePreviewHtml(template) {
+function templatePreviewHtml(template, showLabel = true) {
   const source = String(template || "");
   if (!source.trim()) {
-    return `<div class="status warn">尚未识别句子模板。请填写模板，或提供完整正确答案与词库以便推导。</div>`;
+    return `<div class="status warn">尚未识别题目详情。请在左侧补充题目详情，或提供完整正确答案与待选词后重新解析。</div>`;
   }
   const html = escapeHtml(source)
     .replace(/\{\{\s*(?:blank|\d+)\s*\}\}|_{2,}/gi, '<span class="tpl-blank-mark">____</span>')
@@ -729,7 +800,7 @@ function templatePreviewHtml(template) {
   const blanks = countTemplateBlanksClient(source);
   return `
     <div class="template-preview">
-      <div class="template-preview-label">模板预览 · ${blanks} 个空位</div>
+      ${showLabel ? `<div class="template-preview-label">题目详情预览 · ${blanks} 个空位</div>` : ""}
       <div class="template-preview-body">${html}</div>
     </div>
   `;
@@ -749,12 +820,12 @@ function buildFormHtml(q, scope) {
       <textarea id="${scope}-prompt" placeholder="例如：What impressed you about the team's presentation yesterday?">${escapeHtml(q.prompt)}</textarea>
     </div>
     <div class="field">
-      <label>句子模板 <span class="field-hint">空位用 ____ 或 {{blank}}；固定词原样保留</span></label>
+      <label>题目详情 <span class="field-hint">空位用 ____ 或 {{blank}}；固定词原样保留</span></label>
       <textarea id="${scope}-sentence-template" placeholder="空位用 ____ 或 {{blank}}；固定词原样保留">${escapeHtml(data.sentenceTemplate)}</textarea>
       ${templatePreviewHtml(data.sentenceTemplate)}
     </div>
     <div class="field">
-      <label>词库 <span class="field-hint">逗号隔开；可多于空位数，但不要放入固定文本</span></label>
+      <label>待选词 <span class="field-hint">逗号隔开；可多于空位数，但不要放入固定文本</span></label>
       <textarea id="${scope}-word-bank" placeholder="例如：presentation, entire, their, exceptional, public speaking, were, skills">${escapeHtml((data.wordBank || []).join(", "))}</textarea>
     </div>
     <div class="field">
@@ -857,6 +928,14 @@ function changeFormType(scope) {
 }
 
 function collectQuestionForm(scope, tolerant = false) {
+  if (
+    scope === "import" &&
+    (state.importDraft?.type === "reading_choice" || state.importDraft?.type === "build_sentence")
+  ) {
+    // Read-only import previews save the normalized LLM/local parser draft
+    // directly; editing happens in the structured source table on the left.
+    return normalizeFormQuestion(state.importDraft);
+  }
   const type = $(`${scope}-type`)?.value || "reading_choice";
   const question = {
     type,
@@ -967,6 +1046,9 @@ async function saveQuestion(scope) {
       return;
     }
   }
+  // Parse-time warnings stay on the import page. Clicking save explicitly
+  // confirms a valid draft; the backend enforces the same invariant again.
+  question.needsConfirmation = false;
   const isEdit = scope === "edit";
   if (scope === "import") state.importDraft = question;
   if (isEdit) state.editQuestion = { ...state.editQuestion, ...question };
@@ -1034,6 +1116,7 @@ export {
   parseImport,
   clearImport,
   buildImportSummaryHtml,
+  readingImportPreviewHtml,
   questionFormHtml,
   readingFormHtml,
   countTemplateBlanksClient,

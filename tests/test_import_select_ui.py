@@ -45,3 +45,49 @@ def test_state_has_per_type_raw_buckets():
     src = (ROOT / "static" / "js" / "state.js").read_text(encoding="utf-8")
     assert "importRawByType" in src
     assert "buildSentenceRawFields" in src
+
+
+def test_build_sentence_import_preview_is_read_only_and_saves_parsed_draft():
+    """Build imports render one summary and save the normalized parser result."""
+    src = (ROOT / "static" / "js" / "views" / "import_view.js").read_text(encoding="utf-8")
+    assert 'scope === "import" && q.type === "build_sentence"' in src
+    assert "return state.importDraft ? buildImportSummaryHtml(q)" in src
+    assert 'state.importDraft?.type === "build_sentence"' in src
+    assert "return normalizeFormQuestion(state.importDraft)" in src
+    assert '<span class="k">题目详情</span>' in src
+    assert '<span class="k">待选词</span>' in src
+
+
+def test_build_sentence_user_facing_labels_are_unified():
+    state_src = (ROOT / "static" / "js" / "state.js").read_text(encoding="utf-8")
+    practice_src = (ROOT / "static" / "js" / "views" / "practice_view.js").read_text(encoding="utf-8")
+    assert 'label: "题目详情"' in state_src
+    assert 'label: "待选词"' in state_src
+    assert "<h3>待选词</h3>" in practice_src
+    assert '<div class="bs-section-label">题目详情</div>' in practice_src
+    assert '<div class="report-field-label">题目详情</div>' in practice_src
+    assert '<div class="report-field-label">待选词</div>' in practice_src
+
+
+def test_library_has_no_persisted_pending_confirmation_label():
+    library_src = (ROOT / "static" / "js" / "views" / "library_view.js").read_text(encoding="utf-8")
+    import_src = (ROOT / "static" / "js" / "views" / "import_view.js").read_text(encoding="utf-8")
+    assert "待确认" not in library_src
+    assert "question.needsConfirmation = false" in import_src
+
+
+def test_reading_choice_raw_input_is_merged_and_preview_is_read_only():
+    state_src = (ROOT / "static" / "js" / "state.js").read_text(encoding="utf-8")
+    import_src = (ROOT / "static" / "js" / "views" / "import_view.js").read_text(encoding="utf-8")
+    assert 'key: "questionAndOptions"' in state_src
+    assert 'label: "问题与选项"' in state_src
+    assert 'key: "question", label: "问题"' not in state_src
+    assert 'key: "options"' not in state_src
+    assert 'scope === "import" && q.type === "reading_choice"' in import_src
+    assert "return state.importDraft ? readingImportPreviewHtml(q)" in import_src
+    assert "function readingImportPreviewHtml" in import_src
+    assert '<div class="reading-preview-label">阅读文章</div>' in import_src
+    assert '<div class="reading-preview-label">问题</div>' in import_src
+    assert "collectQuestionForm" in import_src
+    assert 'state.importDraft?.type === "reading_choice"' in import_src
+    assert "readingSaveBlocked" in import_src

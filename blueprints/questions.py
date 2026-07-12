@@ -55,6 +55,9 @@ def create_question():
     validation = validate_question(question)
     if not validation["ok"]:
         return jsonify({"error": "题目结构校验失败", "validation": validation}), 400
+    # needsConfirmation belongs only to the pre-save import draft. A successful
+    # create is the user's explicit confirmation of a structurally valid item.
+    question["needsConfirmation"] = False
     row = question_to_row(question)
     with get_db() as db:
         cursor = db.execute(
@@ -76,6 +79,8 @@ def update_question(question_id):
     validation = validate_question(question)
     if not validation["ok"]:
         return jsonify({"error": "题目结构校验失败", "validation": validation}), 400
+    # Editing and saving has the same confirmation semantics as initial save.
+    question["needsConfirmation"] = False
     with get_db() as db:
         existing = db.execute("SELECT * FROM questions WHERE id = ?", (question_id,)).fetchone()
         if not existing:

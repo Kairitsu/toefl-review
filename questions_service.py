@@ -22,7 +22,9 @@ def question_to_row(question, existing_created_at=None):
         "explanation": question.get("explanation", ""),
         "tags": "[]",
         "data": json.dumps(question.get("data", {}), ensure_ascii=False),
-        "needs_confirmation": 1 if question.get("needsConfirmation") else 0,
+        # Import warnings never become a library state. Successful create/update
+        # means the question passed validation and was explicitly confirmed.
+        "needs_confirmation": 0,
         "created_at": existing_created_at or timestamp,
         "updated_at": timestamp,
     }
@@ -37,7 +39,9 @@ def row_to_question(row, stats=None):
         "prompt": row["prompt"],
         "explanation": row["explanation"],
         "data": json_loads(row["data"], {}),
-        "needsConfirmation": bool(row["needs_confirmation"]),
+        # Compatibility response for older clients; persisted questions are
+        # always confirmed even if a legacy/manual row still contains 1.
+        "needsConfirmation": False,
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
         "stats": stats or empty_stats(),

@@ -83,6 +83,11 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_login_attempts_locked_until ON login_attempts(locked_until);
             """
         )
+        # needs_confirmation is an import-draft concern, not a persisted library
+        # state. Older versions stored it on otherwise valid questions. Keep the
+        # compatibility column for existing databases, but repair every legacy
+        # row so all questions already in the library are formal/confirmed.
+        db.execute("UPDATE questions SET needs_confirmation = 0 WHERE needs_confirmation != 0")
 
 
 def get_setting(db, key, default=None):

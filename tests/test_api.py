@@ -1,6 +1,11 @@
 """Flask integration tests via test_client (isolated SQLite per test)."""
 
+import json
+
+import pytest
+
 from app import hash_password, set_setting
+from questions_service import question_to_row
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +115,75 @@ def test_create_invalid_question_returns_400(client):
     assert response.status_code == 400
     body = response.get_json()
     assert "validation" in body
+    assert client.get("/api/questions").get_json()["items"] == []
+
+
+@pytest.mark.parametrize(
+    "fixture_name",
+    ["sample_reading_choice", "sample_build_sentence", "sample_complete_words"],
+)
+def test_successful_save_clears_parse_confirmation_for_every_type(client, request, fixture_name):
+    payload = {**request.getfixturevalue(fixture_name), "needsConfirmation": True}
+    created = client.post("/api/questions", json=payload)
+    assert created.status_code == 201, created.get_json()
+    body = created.get_json()
+    assert body["needsConfirmation"] is False
+
+    qid = body["id"]
+    detail = client.get(f"/api/questions/{qid}").get_json()
+    assert detail["needsConfirmation"] is False
+
+    with request.getfixturevalue("app_mod").get_db() as db:
+        stored = db.execute(
+            "SELECT needs_confirmation FROM questions WHERE id = ?", (qid,)
+        ).fetchone()
+    assert stored["needs_confirmation"] == 0
+
+
+def test_edit_save_clears_confirmation_in_payload_and_database(
+    client, app_mod, sample_build_sentence
+):
+    created = client.post("/api/questions", json=sample_build_sentence).get_json()
+    qid = created["id"]
+    with app_mod.get_db() as db:
+        db.execute("UPDATE questions SET needs_confirmation = 1 WHERE id = ?", (qid,))
+        db.commit()
+
+    payload = {**sample_build_sentence, "needsConfirmation": True, "explanation": "Updated"}
+    updated = client.put(f"/api/questions/{qid}", json=payload)
+    assert updated.status_code == 200, updated.get_json()
+    assert updated.get_json()["needsConfirmation"] is False
+    with app_mod.get_db() as db:
+        stored = db.execute(
+            "SELECT needs_confirmation FROM questions WHERE id = ?", (qid,)
+        ).fetchone()
+    assert stored["needs_confirmation"] == 0
+
+
+def test_init_db_repairs_legacy_pending_questions(app_mod, sample_reading_choice):
+    question = app_mod.normalize_question(sample_reading_choice)
+    row = question_to_row(question)
+    row["needs_confirmation"] = 1
+    with app_mod.get_db() as db:
+        cursor = db.execute(
+            """
+            INSERT INTO questions(type, title, article, prompt, explanation, tags, data,
+                                  needs_confirmation, created_at, updated_at)
+            VALUES(:type, :title, :article, :prompt, :explanation, :tags, :data,
+                   :needs_confirmation, :created_at, :updated_at)
+            """,
+            row,
+        )
+        qid = cursor.lastrowid
+        db.commit()
+
+    app_mod.init_db()
+    with app_mod.get_db() as db:
+        stored = db.execute(
+            "SELECT needs_confirmation, data FROM questions WHERE id = ?", (qid,)
+        ).fetchone()
+    assert stored["needs_confirmation"] == 0
+    assert json.loads(stored["data"])["correctAnswer"] == "B"
 
 
 # ---------------------------------------------------------------------------

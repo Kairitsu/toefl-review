@@ -171,7 +171,6 @@ function questionCardHtml(q, selectable = false) {
           <div class="card-meta">
             <span class="type-badge">${TYPE_NAMES[q.type] || q.type}</span>
             ${highError ? `<span class="pill bad">高错误率 ${errorRate}%</span>` : ""}
-            ${q.needsConfirmation ? `<span class="pill warn">待确认</span>` : ""}
           </div>
           ${titleHtml}
           <p class="subtle">${escapeHtml(truncate(snippet, 140))}</p>

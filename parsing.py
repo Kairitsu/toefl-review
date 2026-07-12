@@ -35,11 +35,13 @@ BUILD_FIELD_LABELS = {
     "问题": "questioner",
     "提示": "questioner",
     "对话": "questioner",
+    "题目详情": "sentenceTemplate",
     "句子模板": "sentenceTemplate",
     "模板": "sentenceTemplate",
     "句型模板": "sentenceTemplate",
     "sentence template": "sentenceTemplate",
     "template": "sentenceTemplate",
+    "待选词": "wordBank",
     "词库": "wordBank",
     "单词库": "wordBank",
     "word bank": "wordBank",
@@ -145,15 +147,16 @@ def match_answer_to_letter(answer, options):
 
 
 def parse_options_text(text):
-    """Parse options from pasted text. Supports 'A. xxx\\nB. yyy', objects, or plain list."""
+    """Parse A-D options using common punctuation or one-option-per-line formats."""
     text = as_clean_string(text)
     if not text:
         return []
     if isinstance(text, list):
         return normalize_options(text)
-    # Labeled lines: "A. xxx" / "A) xxx" / "(A) xxx" / "A: xxx"
+    # Labeled lines: A. / A) / (A) / A: / A、. A separator is required so
+    # ordinary lines beginning with A-D are never mistaken for options.
     labeled = re.findall(
-        r"(?m)^\s*[\(]?\s*([A-Da-d])\s*[\).\):：]?\s*(.+?)\s*$",
+        r"(?m)^\s*\(?\s*([A-Da-d])\s*\)?\s*(?:[.、:：)]\s*|\s+)(.+?)\s*$",
         text,
     )
     if labeled:
@@ -868,11 +871,11 @@ def looks_like_build_sentence_raw(raw_text):
     if extract_structured_build_fields(text):
         return True
     signals = 0
-    if re.search(r"(提问者|词库|句子模板|正确答案|Build a Sentence|word bank)", text, flags=re.I):
+    if re.search(r"(提问者|待选词|词库|题目详情|句子模板|正确答案|Build a Sentence|word bank)", text, flags=re.I):
         signals += 1
     if BLANK_MARKER_RE.search(text) or re.search(r"_{3,}", text):
         signals += 1
-    if re.search(r"(presentation|during the|word bank|词库)", text, flags=re.I):
+    if re.search(r"(presentation|during the|word bank|待选词|词库)", text, flags=re.I):
         signals += 1
     return signals >= 2
 
@@ -1040,6 +1043,7 @@ READING_CHOICE_FIELD_LABELS = {
     "article": "article",
     "reading text": "article",
     "readingtext": "article",
+    "问题与选项": "questionAndOptions",
     "问题": "question",
     "题干": "question",
     "question": "question",
@@ -1055,6 +1059,22 @@ READING_CHOICE_FIELD_LABELS = {
     "分析": "analysis",
     "explanation": "analysis",
 }
+
+
+def split_reading_question_and_options(value):
+    """Split a combined question/options paste at its first A-D option line."""
+    text = as_clean_string(value)
+    if not text:
+        return "", []
+    marker = re.search(
+        r"(?m)^\s*\(?\s*[Aa]\s*\)?\s*(?:[.、:：)]\s*|\s+)",
+        text,
+    )
+    if not marker:
+        return text, []
+    question = as_clean_string(text[: marker.start()])
+    options = parse_options_text(text[marker.start() :])
+    return question, options
 
 
 def extract_structured_reading_choice_fields(raw_text):
@@ -1098,14 +1118,17 @@ def parse_structured_reading_choice(raw_text):
                 "data": {"options": [], "correctAnswer": ""},
             }
         )
-    options = parse_options_text(fields.get("options", ""))
+    combined_question, combined_options = split_reading_question_and_options(
+        fields.get("questionAndOptions", "")
+    )
+    options = parse_options_text(fields.get("options", "")) or combined_options
     correct = match_answer_to_letter(fields.get("correctAnswer", ""), options)
     return normalize_question(
         {
             "type": "reading_choice",
             "title": fields.get("title", ""),
             "article": fields.get("article", ""),
-            "prompt": fields.get("question", ""),
+            "prompt": fields.get("question", "") or combined_question,
             "explanation": fields.get("analysis", ""),
             "needsConfirmation": not correct,
             "data": {"options": options, "correctAnswer": correct},

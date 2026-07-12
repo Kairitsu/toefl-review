@@ -146,6 +146,36 @@ class TestGeneralFlow:
         assert r["validation"]["ok"] is True
         assert r["draft"]["article"] == "Art"
 
+    def test_combined_question_and_options_common_formats(self, monkeypatch):
+        set_llm(monkeypatch, None, ["down"])
+        formats = [
+            "A. one\nB. two\nC. three\nD. four",
+            "A、one\nB、two\nC、three\nD、four",
+            "A: one\nB: two\nC: three\nD: four",
+            "(A) one\n(B) two\n(C) three\n(D) four",
+        ]
+        for options in formats:
+            raw = (
+                "标题：T\n文章：Article\n问题与选项：\n"
+                "What is the main purpose?\n\n"
+                f"{options}\n正确答案：B\n解析：Because"
+            )
+            r = import_pipeline.parse_import(raw, "reading_choice")
+            assert r["validation"]["ok"] is True, (options, r["validation"])
+            assert r["draft"]["prompt"] == "What is the main purpose?"
+            assert [item["key"] for item in r["draft"]["data"]["options"]] == ["A", "B", "C", "D"]
+            assert r["draft"]["data"]["correctAnswer"] == "B"
+
+    def test_combined_question_and_incomplete_options_cannot_save(self, monkeypatch):
+        set_llm(monkeypatch, None, ["down"])
+        raw = (
+            "标题：T\n文章：Article\n问题与选项：\nQuestion?\n\n"
+            "A. one\nB. two\nC. three\n正确答案：B"
+        )
+        r = import_pipeline.parse_import(raw, "reading_choice")
+        assert r["validation"]["ok"] is False
+        assert any("A/B/C/D 四个选项" in error for error in r["validation"]["errors"])
+
     def test_raw_user_content_not_cleared(self, monkeypatch):
         raw = "标题：T\n文章：Art\n问题：Q?\n选项：\nA. a\nB. b\nC. c\nD. d\n正确答案：B"
         set_llm(monkeypatch, None, ["down"])
@@ -408,6 +438,22 @@ class TestReadingChoice:
 
 # ---------------------------------------------------------------------------
 # 写作造句题
+
+
+def test_structured_build_sentence_accepts_new_ui_labels():
+    raw = (
+        "提问者：What did Maria do?\n"
+        "题目详情：____ went to the ____.\n"
+        "待选词：Maria, store, John, park\n"
+        "正确答案：Maria, store\n"
+        "解析：Match the subject and destination."
+    )
+    result = import_pipeline.parse_import(raw, "build_sentence")
+    assert result["validation"]["ok"] is True
+    draft = result["draft"]
+    assert draft["data"]["sentenceTemplate"].count("{{blank}}") == 2
+    assert draft["data"]["wordBank"] == ["Maria", "store", "John", "park"]
+    assert draft["data"]["correctOrder"] == ["Maria", "store"]
 # ---------------------------------------------------------------------------
 
 

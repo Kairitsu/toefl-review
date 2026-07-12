@@ -1517,7 +1517,8 @@ button:focus-visible {
   padding: 12px 14px;
   border-radius: var(--radius);
   border: 1px solid #d3e4e7;
-  background: linear-gradient(180deg, #f7fbfc, #fff);
+  background: linear-gradient(180deg, #eef8ff, #f8fcff);
+  border-color: #bddcf2;
 }
 
 .build-summary-row {
@@ -1553,6 +1554,102 @@ button:focus-visible {
   border: 1px solid var(--line);
   font-size: 12.5px;
   font-weight: 600;
+}
+
+.reading-import-preview {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 16px;
+  border: 1px solid #bddcf2;
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, #eef8ff, #f8fcff);
+  color: var(--ink);
+  overflow: visible;
+}
+
+.reading-preview-section,
+.reading-preview-question-block,
+.reading-preview-explanation {
+  min-width: 0;
+}
+
+.reading-preview-label {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.reading-preview-title h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.reading-preview-article,
+.reading-preview-explanation > div:last-child,
+.reading-preview-question {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+}
+
+.reading-preview-question-block,
+.reading-preview-answer,
+.reading-preview-explanation {
+  padding-top: 14px;
+  border-top: 1px solid #cfe3f1;
+}
+
+.reading-preview-question {
+  margin-bottom: 12px;
+  font-weight: 650;
+}
+
+.reading-preview-options {
+  display: grid;
+  gap: 8px;
+}
+
+.reading-preview-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid #d7e5ef;
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.reading-preview-option .option-text {
+  overflow-wrap: anywhere;
+}
+
+.reading-preview-answer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.reading-preview-answer .reading-preview-label {
+  margin: 0;
+}
+
+.bs-section-label,
+.report-field-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.bs-section-label {
+  margin-bottom: 10px;
+}
+
+.report-field-label {
+  margin: 12px 0 6px;
 }
 
 .sentence-blank {
@@ -2546,6 +2643,11 @@ button:focus-visible {
 }
 
 @media (max-width: 480px) {
+  .build-summary-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
   .result-stats {
     grid-template-columns: 1fr 1fr;
   }

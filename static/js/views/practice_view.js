@@ -242,7 +242,6 @@ function stripResult(q) {
     prompt: q.prompt || "",
     explanation: q.explanation || "",
     data: q.data,
-    needs_confirmation: Boolean(q.needs_confirmation),
   };
 }
 
@@ -462,16 +461,17 @@ function buildPracticeHtml(q) {
   }
 
   return `
-    <p class="bs-prompt">${escapeHtml(q.prompt || "Build a sentence using the word bank.")}</p>
+    <p class="bs-prompt">${escapeHtml(q.prompt || "使用待选词完成句子。")}</p>
     ${submitted ? "" : `<p class="bs-hint">点击下方词块填入空位 · 再次点击空位可撤回 · 也支持拖拽词块到空位</p>`}
     <div class="bs-sentence-card">
+      <div class="bs-section-label">题目详情</div>
       <div class="bs-sentence" aria-label="句子填空">
         ${renderInteractiveSentence(data.sentenceTemplate || "", wordBank, submitted, positions)}
       </div>
     </div>
     <div class="word-bank-section">
       <div class="word-bank-head">
-        <h3>Word Bank</h3>
+        <h3>待选词</h3>
         <p class="subtle">${submitted ? "本题已提交" : "选择词块填入当前高亮空位"}</p>
       </div>
       <div class="word-bank">
@@ -1091,10 +1091,11 @@ function questionOriginalHtml(q, detail) {
     return `
       <div class="result-block">
         <h3>原题</h3>
-        <p class="report-q-prompt">${escapeHtml(q.prompt || "用词库中的词造句。")}</p>
+        <p class="report-q-prompt">${escapeHtml(q.prompt || "使用待选词完成句子。")}</p>
+        <div class="report-field-label">题目详情</div>
         <div class="report-template">${escapeHtml(display)}</div>
         ${(q.data?.wordBank || []).length
-          ? `<div class="report-wordbank">
+          ? `<div class="report-field-label">待选词</div><div class="report-wordbank">
               ${q.data.wordBank.map((w) => `<span class="word-token" disabled>${escapeHtml(w)}</span>`).join("")}
             </div>`
           : ""}

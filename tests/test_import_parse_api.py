@@ -29,6 +29,27 @@ TRADE_RAW = (
     "test analysis"
 )
 
+BUILD_RAW = (
+    "提问者：What did Maria do?\n"
+    "题目详情：____ went to the ____.\n"
+    "待选词：Maria, store, John, park\n"
+    "正确答案：Maria, store\n"
+    "解析：Match the subject and destination."
+)
+
+READING_COMBINED_RAW = (
+    "标题：Weather Announcement\n"
+    "文章：Classes will move online because severe weather is expected.\n"
+    "问题与选项：\n"
+    "What is the main purpose of the announcement?\n\n"
+    "A. To describe a forecasting system.\n"
+    "B. To announce that on-campus classes are canceled.\n"
+    "C. To advertise optional online classes.\n"
+    "D. To explain a permanent schedule change.\n"
+    "正确答案：B\n"
+    "解析：The announcement changes classes because of severe weather."
+)
+
 
 def _mock_llm(monkeypatch, parsed=None, errors=None):
     monkeypatch.setattr(
@@ -120,6 +141,98 @@ def test_trade_example_can_be_saved(client, monkeypatch):
     saved = save.get_json()
     assert saved["type"] == "complete_words"
     assert len(saved["data"]["blanks"]) == 4
+
+
+def test_valid_llm_build_draft_becomes_confirmed_when_saved(client, monkeypatch):
+    _mock_llm(
+        monkeypatch,
+        {
+            "type": "build_sentence",
+            "prompt": "What did Maria do?",
+            "explanation": "LLM result",
+            "needsConfirmation": True,
+            "data": {
+                "sentenceTemplate": "{{blank}} went to the {{blank}}.",
+                "wordBank": ["Maria", "store", "John", "park"],
+                "correctOrder": ["Maria", "store"],
+                "completeSentence": "Maria went to the store.",
+            },
+        },
+    )
+    parsed = client.post(
+        "/api/import/parse",
+        json={"rawText": BUILD_RAW, "typeHint": "build_sentence"},
+    )
+    assert parsed.status_code == 200, parsed.get_json()
+    draft = parsed.get_json()["draft"]
+    save = client.post("/api/questions", json=draft)
+    assert save.status_code == 201, save.get_json()
+    assert save.get_json()["needsConfirmation"] is False
+
+
+def test_local_fallback_build_draft_becomes_confirmed_when_saved(client, monkeypatch):
+    _mock_llm(monkeypatch, None, ["LLM 请求超时"])
+    parsed = client.post(
+        "/api/import/parse",
+        json={"rawText": BUILD_RAW, "typeHint": "build_sentence"},
+    )
+    assert parsed.status_code == 200, parsed.get_json()
+    body = parsed.get_json()
+    assert body["validation"]["ok"] is True
+    assert any("本地" in warning for warning in body["validation"]["warnings"])
+    save = client.post("/api/questions", json=body["draft"])
+    assert save.status_code == 201, save.get_json()
+    assert save.get_json()["needsConfirmation"] is False
+
+
+def test_combined_reading_local_fallback_preserves_all_fields_on_save(client, monkeypatch):
+    _mock_llm(monkeypatch, None, ["LLM 请求超时"])
+    parsed = client.post(
+        "/api/import/parse",
+        json={"rawText": READING_COMBINED_RAW, "typeHint": "reading_choice"},
+    )
+    assert parsed.status_code == 200, parsed.get_json()
+    draft = parsed.get_json()["draft"]
+    save = client.post("/api/questions", json=draft)
+    assert save.status_code == 201, save.get_json()
+    saved = save.get_json()
+    assert saved["title"] == "Weather Announcement"
+    assert saved["article"].startswith("Classes will move online")
+    assert saved["prompt"] == "What is the main purpose of the announcement?"
+    assert [item["key"] for item in saved["data"]["options"]] == ["A", "B", "C", "D"]
+    assert saved["data"]["correctAnswer"] == "B"
+    assert saved["explanation"].startswith("The announcement")
+
+
+def test_combined_reading_valid_llm_result_preserves_all_fields_on_save(client, monkeypatch):
+    llm_question = {
+        "type": "reading_choice",
+        "title": "Weather Announcement",
+        "article": "Classes will move online because severe weather is expected.",
+        "prompt": "What is the main purpose of the announcement?",
+        "explanation": "The announcement changes classes because of severe weather.",
+        "data": {
+            "options": [
+                {"key": "A", "text": "To describe a forecasting system."},
+                {"key": "B", "text": "To announce that on-campus classes are canceled."},
+                {"key": "C", "text": "To advertise optional online classes."},
+                {"key": "D", "text": "To explain a permanent schedule change."},
+            ],
+            "correctAnswer": "B",
+        },
+    }
+    _mock_llm(monkeypatch, llm_question)
+    parsed = client.post(
+        "/api/import/parse",
+        json={"rawText": READING_COMBINED_RAW, "typeHint": "reading_choice"},
+    )
+    assert parsed.status_code == 200, parsed.get_json()
+    save = client.post("/api/questions", json=parsed.get_json()["draft"])
+    assert save.status_code == 201, save.get_json()
+    saved = save.get_json()
+    assert saved["prompt"] == llm_question["prompt"]
+    assert saved["data"] == llm_question["data"]
+    assert saved["explanation"] == llm_question["explanation"]
 
 
 def test_global_error_handler_returns_json(client, monkeypatch):

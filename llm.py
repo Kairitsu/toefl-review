@@ -211,6 +211,7 @@ reading_choice 的 data：
   "options": [{"key":"A","text":""},{"key":"B","text":""},{"key":"C","text":""},{"key":"D","text":""}],
   "correctAnswer": "A/B/C/D；原文没有明确答案就留空"
 }
+当输入使用“问题与选项”字段时，字段开头是 prompt，随后 A/B/C/D 四行必须拆分到 data.options；不要把选项文本并入 prompt。
 
 build_sentence 的 data：
 {

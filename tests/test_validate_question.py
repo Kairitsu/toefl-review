@@ -69,7 +69,7 @@ class TestValidateBuildSentence:
         }
         result = validate_question(question)
         assert result["ok"] is False
-        assert any("不在词库" in e for e in result["errors"]), (
+        assert any("不在待选词" in e for e in result["errors"]), (
             f"Expected 'not in word bank' error, got: {result['errors']}"
         )
 

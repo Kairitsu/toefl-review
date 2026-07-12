@@ -165,9 +165,9 @@ def _validate_llm_build_sentence(normalized):
     word_bank = data.get("wordBank")
     correct_order = data.get("correctOrder")
     if not template:
-        errors.append("LLM 未返回句子模板")
+        errors.append("LLM 未返回题目详情")
     if not isinstance(word_bank, list) or not word_bank:
-        errors.append("LLM 未返回词库")
+        errors.append("LLM 未返回待选词")
     if not isinstance(correct_order, list) or not correct_order:
         errors.append("LLM 未返回正确顺序")
     if (
@@ -177,7 +177,7 @@ def _validate_llm_build_sentence(normalized):
         and count_template_blanks(template) != len(correct_order)
     ):
         errors.append(
-            f"LLM 模板空位 {count_template_blanks(template)} 个，但正确顺序有 {len(correct_order)} 项"
+            f"LLM 题目详情空位 {count_template_blanks(template)} 个，但正确顺序有 {len(correct_order)} 项"
         )
     return (not errors), errors
 
